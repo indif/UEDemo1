@@ -173,6 +173,34 @@ namespace
         return MaterialInstanceDynamic;
     }
 
+    void AppendRawMesh(const vector<float>& vertices, TArray<FVector>& VertexList)
+    {
+        int32 Index = VertexList.Num();
+        int32 NumMeshVertices = vertices.size() / 3;
+        if (NumMeshVertices > 3 && NumMeshVertices % 3 == 0)
+        {
+            VertexList.AddUninitialized(NumMeshVertices);
+            for (size_t j = 0, j_len = vertices.size(); j < j_len; j += 3)
+                VertexList[Index++].Set(vertices[j + 1] * 100, vertices[j + 0] * 100, vertices[j + 2] * 100);
+        }
+    }
+
+    void AppendEllipticalMesh(const vector<float>& vertices, TArray<FVector>& VertexList)
+    {
+        int32 Index = VertexList.Num();
+
+        //[origin，xVector，yVector，radius]
+        //TODO:
+    }
+
+    void AppendCylinderMesh(const vector<float>& vertices, TArray<FVector>& VertexList)
+    {
+        int32 Index = VertexList.Num();
+
+        //[topCenter，bottomCenter，xAxis，yAxis，radius]
+        //TODO:
+    }
+
     UStaticMesh* BuildStaticMesh(const TArray<FVector>& VertexList, UObject* Outer, FName Name)
     {
         UStaticMesh* StaticMesh = NewObject<UStaticMesh>(Outer, Name);
@@ -221,7 +249,7 @@ namespace
         return StaticMesh;
     }
 
-    UStaticMesh* BuildStaticMesh(vector<float> vertices, UObject* Outer, FName Name)
+    UStaticMesh* BuildStaticMesh(const vector<float>& vertices, UObject* Outer, FName Name)
     {
         check(vertices.size() > 9 && vertices.size() % 9 == 0);
         int32 NumVertices = vertices.size() / 3;
@@ -235,29 +263,20 @@ namespace
 
     UStaticMesh* BuildStaticMesh(const Body_info& Node, UObject* Outer, FName Name)
     {
-        int32 NumVertices = 0;
-        for (size_t i = 0, i_len = Node.fragment.size(); i < i_len; i++)
-        {
-            if (Node.fragment[i].name == "Mesh")
-            {
-                NumVertices += Node.fragment[i].vertices.size() / 3;
-            }
-        }
-        if (NumVertices < 3 || NumVertices %3 != 0)
-            return nullptr;
-
         TArray<FVector> VertexList;
-        VertexList.SetNum(NumVertices);
-        int32 VertexIndex = 0;
         for (size_t i = 0, i_len = Node.fragment.size(); i < i_len; i++)
         {
             if (Node.fragment[i].name == "Mesh")
             {
-                const vector<float>& vertices = Node.fragment[i].vertices;
-                for (size_t j = 0, j_len = vertices.size(); j < j_len; j += 3)
-                {
-                    VertexList[VertexIndex++].Set(vertices[j + 1] * 100, vertices[j + 0] * 100, vertices[j + 2] * 100);
-                }
+                AppendRawMesh(Node.fragment[i].vertices, VertexList);
+            }
+            else if (Node.fragment[i].name == "Elliptical")
+            {
+                AppendEllipticalMesh(Node.fragment[i].vertices, VertexList);
+            }
+            else if (Node.fragment[i].name == "Cylinder")
+            {
+                AppendCylinderMesh(Node.fragment[i].vertices, VertexList);
             }
         }
 
@@ -354,7 +373,9 @@ void ADynamicGenActorsGameMode::BeginPlay()
             for (size_t j = 0; j < Node.fragment.size(); j++)
             {
                 Body_info& Fragment = Node.fragment[j];
-                if (Fragment.name == "Mesh" && Fragment.vertices.size() > 9 && Fragment.vertices.size() % 9 == 0)
+                if ((Fragment.name == "Mesh" && Fragment.vertices.size() > 9 && Fragment.vertices.size() % 9 == 0) ||
+                    Fragment.name == "Elliptical" || 
+                    Fragment.name == "Cylinder")
                 {
                     bValidComponent = true;
                     break;
