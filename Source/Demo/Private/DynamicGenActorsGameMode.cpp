@@ -13,9 +13,7 @@
 
 namespace
 {
-    using namespace std;
-
-    typedef struct body_info
+    struct Body_info
     {
         int dbid;  //结构体的索引就是dbid 从0开始
         int parentdbid;      //parent db id
@@ -25,10 +23,10 @@ namespace
         float material[4];  //材质
         float box[6];      //min max
         std::vector<float> vertices;
-        std::vector<body_info> fragment;
-    } Body_info;
+        std::vector<Body_info> fragment;
+    };
 
-    typedef struct header_info
+    struct Header_info
     {
         //int dbid;  //结构体的索引就是dbid 从0开始
         short empty_fragment;  //1为有fragment 2为没有fragment
@@ -42,135 +40,38 @@ namespace
         int startbox;   //box开始索引
         int startvertices;  //vertices开始索引
         int verticeslength;  //vertices头文件大小
-    } Header_info;
+    };
 
-    void read_header_info(fstream& file, int nsize, vector<Header_info>* headerList) {
+    void read_header_info(std::fstream& file, Header_info& info)
+    {
+        file.read((char*)&info.empty_fragment, sizeof(info.empty_fragment));
+        file.read((char*)&info.parentdbid, sizeof(info.parentdbid));
+        file.read((char*)&info.level, sizeof(info.level));
+        file.read((char*)&info.startname, sizeof(info.startname));
+        file.read((char*)&info.namelength, sizeof(info.namelength));
+        file.read((char*)&info.startproperty, sizeof(info.startproperty));
+        file.read((char*)&info.propertylength, sizeof(info.propertylength));
+        file.read((char*)&info.startmaterial, sizeof(info.startmaterial));
+        file.read((char*)&info.startbox, sizeof(info.startbox));
+        file.read((char*)&info.startvertices, sizeof(info.startvertices));
+        file.read((char*)&info.verticeslength, sizeof(info.verticeslength));
+        file.seekg(10, std::ios::cur);
+    }
+
+    void read_header_info(std::fstream& file, int nsize, std::vector<Header_info>& header_list) {
+        header_list.resize(nsize);
         for (int i = 0; i < nsize; i++) {
-            Header_info info = { 0 };
-            file.read((char*)&info.empty_fragment, sizeof(info.empty_fragment));
-            file.read((char*)&info.parentdbid, sizeof(info.parentdbid));
-            file.read((char*)&info.level, sizeof(info.level));
-            file.read((char*)&info.startname, sizeof(info.startname));
-            file.read((char*)&info.namelength, sizeof(info.namelength));
-            file.read((char*)&info.startproperty, sizeof(info.startproperty));
-            file.read((char*)&info.propertylength, sizeof(info.propertylength));
-            file.read((char*)&info.startmaterial, sizeof(info.startmaterial));
-            file.read((char*)&info.startbox, sizeof(info.startbox));
-            file.read((char*)&info.startvertices, sizeof(info.startvertices));
-            //cout << "startvertices: " << info.startvertices << endl;
-            file.read((char*)&info.verticeslength, sizeof(info.verticeslength));
-            //cout << "verticeslength: " << info.verticeslength<< endl;
-            headerList->push_back(info);
-            file.seekg(10, ios::cur);
+            read_header_info(file, header_list[i]);
         }
     }
 
-    void read_body_info(fstream& file, int nsize, vector<Header_info>& headerList, vector<Body_info>* node_v, bool bfragment = false) {
-        for (int i = 0; i < nsize; i++) {
-            Body_info body = { 0 };
-            Header_info info = headerList[i];
-
-            body.dbid = i;
-            body.parentdbid = info.parentdbid;
-            body.level = info.level;
-
-            //node name
-            file.seekg(info.startname, ios::beg);
-            char* buffer = new char[info.namelength + 1];
-            file.read(buffer, info.namelength);
-            buffer[info.namelength] = '\0';
-            string name(buffer);
-            //cout << "name: " << name.c_str() << endl;
-            body.name = name;
-            delete[] buffer;
-
-            //node property
-            file.seekg(info.startproperty, ios::beg);
-            buffer = new char[info.propertylength + 1];
-            file.read(buffer, info.propertylength);
-            buffer[info.propertylength] = '\0';
-            string property(buffer);
-            //cout << "property: " << property.c_str() << endl;
-            body.property = property;
-            delete[] buffer;
-
-            file.seekg(info.startmaterial, ios::beg);
-            file.read((char*)&body.material, sizeof(body.material));
-
-            if (!bfragment) {
-                file.seekg(info.startbox, ios::beg);
-                file.read((char*)&body.box, sizeof(body.box));
-            }
-
-            //fragment vertices
-            file.seekg(info.startvertices, ios::beg);
-
-            if (bfragment) {
-                for (int k = 0; k < info.verticeslength / 4; k++) {
-                    float f;
-                    file.read((char*)&f, sizeof(f));
-                    body.vertices.push_back(f);
-                }
-            }
-            else {
-                if (info.verticeslength > 0) {
-                    vector<Body_info> fragment_v;
-                    vector<Header_info> fragment_headerList;
-                    read_header_info(file, info.verticeslength / 50, &fragment_headerList);
-                    read_body_info(file, info.verticeslength / 50, fragment_headerList, &body.fragment, true);
-                }
-            }
-
-            node_v->push_back(body);
-        }
-    }
-
-    bool load_file(const std::wstring& file_name, vector<Body_info>& node_v) {
-        fstream file;
-        file.open(file_name, ios::in | ios::binary);
-        if (!file.is_open()) {
-            cout << "open the file fail" << endl;
-            return false;
-        }
-        file.seekg(0, ios::end);
-        int file_size = static_cast<int>(file.tellg());
-        cout << "file size: " << file_size << endl;
-
-        //dbid个数 = node个数
-        file.seekg(0, ios::beg);
-        int nsize;
-        file.read((char*)&nsize, sizeof(nsize));
-        cout << "node number: " << nsize << endl;
-
-        //每一个node头的大小
-        short headlength;
-        file.read((char*)&headlength, sizeof(headlength));
-        cout << "head length: " << headlength << endl;
-
-        //header
-        vector<Header_info> headerList;
-        read_header_info(file, nsize, &headerList);
-
-        int file_tellg = static_cast<int>(file.tellg());
-        cout << "file tellg: " << file_tellg << endl;
-
-        //body
-        if (headerList.size() == nsize) {
-            read_body_info(file, nsize, headerList, &node_v);
-        }
-        cout << "ok" << endl;
-
-        file.close();
-        return true;
-    }
-
-    void read_body_info(fstream& file, const Header_info& header, bool is_fragment, Body_info& body)
+    void read_body_info(std::fstream& file, const Header_info& header, bool is_fragment, Body_info& body)
     {
         body.parentdbid = header.parentdbid;
         body.level = header.level;
 
         //node name
-        file.seekg(header.startname, ios::beg);
+        file.seekg(header.startname, std::ios::beg);
         char* buffer = new char[header.namelength + 1];
         file.read(buffer, header.namelength);
         buffer[header.namelength] = '\0';
@@ -178,23 +79,23 @@ namespace
         delete[] buffer;
 
         //node property
-        file.seekg(header.startproperty, ios::beg);
+        file.seekg(header.startproperty, std::ios::beg);
         buffer = new char[header.propertylength + 1];
         file.read(buffer, header.propertylength);
         buffer[header.propertylength] = '\0';
         body.property = buffer;
         delete[] buffer;
 
-        file.seekg(header.startmaterial, ios::beg);
+        file.seekg(header.startmaterial, std::ios::beg);
         file.read((char*)&body.material, sizeof(body.material));
 
         if (!is_fragment) {
-            file.seekg(header.startbox, ios::beg);
+            file.seekg(header.startbox, std::ios::beg);
             file.read((char*)&body.box, sizeof(body.box));
         }
 
         //fragment vertices
-        file.seekg(header.startvertices, ios::beg);
+        file.seekg(header.startvertices, std::ios::beg);
 
         if (is_fragment) {
             for (int k = 0; k < header.verticeslength / 4; k++) {
@@ -205,8 +106,8 @@ namespace
         }
         else {
             if (header.verticeslength > 0) {
-                vector<Header_info> fragment_headerList;
-                read_header_info(file, header.verticeslength / 50, &fragment_headerList);
+                std::vector<Header_info> fragment_headerList;
+                read_header_info(file, header.verticeslength / 50, fragment_headerList);
                 int num_fragments = fragment_headerList.size();
                 body.fragment.resize(num_fragments);
                 for (int k = 0; k < num_fragments; k++) {
@@ -216,70 +117,37 @@ namespace
         }
     }
 
-    bool load_file1(const std::wstring& file_name, vector<Body_info>& node_v) {
-        fstream file;
-        file.open(file_name, ios::in | ios::binary);
-        if (!file.is_open()) {
-            cout << "open the file fail" << endl;
-            return false;
-        }
-        file.seekg(0, ios::end);
-        int file_size = static_cast<int>(file.tellg());
-        cout << "file size: " << file_size << endl;
-
-        //dbid个数 = node个数
-        file.seekg(0, ios::beg);
+    bool load_file(std::fstream& file, std::vector<Body_info*>& node_list) {
+        file.seekg(0, std::ios::beg);
         int nsize;
         file.read((char*)&nsize, sizeof(nsize));
-        cout << "node number: " << nsize << endl;
 
         //每一个node头的大小
         short headlength;
         file.read((char*)&headlength, sizeof(headlength));
-        cout << "head length: " << headlength << endl;
 
         //header
-        vector<Header_info> headerList;
-        read_header_info(file, nsize, &headerList);
-        check(headerList.size() == nsize);
+        std::vector<Header_info> header_list;
+        read_header_info(file, nsize, header_list);
+        check(header_list.size() == nsize);
 
-        int file_tellg = static_cast<int>(file.tellg());
-        cout << "file tellg: " << file_tellg << endl;
-
-        //body
-        node_v.resize(nsize);
-        for (int i = 0; i < nsize; i++) {
-            node_v[i].dbid = i;
-            read_body_info(file, headerList[i], false, node_v[i]);
+        node_list.resize(nsize);
+        for (int i = 0; i < nsize; i++)
+        {
+            node_list[i] = new Body_info;
+            node_list[i]->dbid = i;
+            read_body_info(file, header_list[i], false, *node_list[i]);
         }
 
-        file.close();
         return true;
     }
 
-    bool load_file2(const std::wstring& file_name, vector<Header_info>& header_list) {
-        fstream file;
-        file.open(file_name, ios::in | ios::binary);
-        if (!file.is_open()) {
-            cout << "open the file fail" << endl;
+    bool load_file(const std::wstring& filename, std::vector<Body_info*>& node_list) {
+        std::fstream file;
+        file.open(filename, std::ios::in | std::ios::binary);
+        if (!file.is_open())
             return false;
-        }
-
-        //dbid个数 = node个数
-        file.seekg(0, ios::beg);
-        int nsize;
-        file.read((char*)&nsize, sizeof(nsize));
-
-        //每一个node头的大小
-        short headlength;
-        file.read((char*)&headlength, sizeof(headlength));
-
-        //header
-        read_header_info(file, nsize, &header_list);
-        check(header_list.size() == nsize);
-        
-        file.close();
-        return true;
+        return load_file(file, node_list);
     }
 
     bool IsNodeValid(const Body_info& Node)
@@ -297,7 +165,7 @@ namespace
         return false;
     }
 
-    void AppendRawMesh(const vector<float>& vertices, TArray<FVector>& VertexList)
+    void AppendRawMesh(const std::vector<float>& vertices, TArray<FVector>& VertexList)
     {
         int32 Index = VertexList.Num();
         int32 NumMeshVertices = vertices.size() / 3;
@@ -309,7 +177,7 @@ namespace
         }
     }
 
-    void AppendEllipticalMesh(const vector<float>& vertices, TArray<FVector>& VertexList)
+    void AppendEllipticalMesh(const std::vector<float>& vertices, TArray<FVector>& VertexList)
     {
         int32 Index = VertexList.Num();
 
@@ -317,7 +185,7 @@ namespace
         //TODO:
     }
 
-    void AppendCylinderMesh(const vector<float>& vertices, TArray<FVector>& VertexList)
+    void AppendCylinderMesh(const std::vector<float>& vertices, TArray<FVector>& VertexList)
     {
         int32 Index = VertexList.Num();
 
@@ -395,166 +263,155 @@ namespace
         BuildStaticMesh(StaticMesh, VertexList);
     }
 
-    UStaticMesh* BuildStaticMesh(const TArray<FVector>& VertexList, UObject* Outer, FName Name)
+    UMaterialInstanceDynamic* CreateMaterialInstanceDynamic(UMaterialInterface* SourceMaterial, const FLinearColor& Color, float Roughness)
     {
-        UStaticMesh* StaticMesh = NewObject<UStaticMesh>(Outer, Name);
-        BuildStaticMesh(StaticMesh, VertexList);
-        return StaticMesh;
-    }
-
-    UStaticMesh* BuildStaticMesh(const vector<float>& vertices, UObject* Outer, FName Name)
-    {
-        check(vertices.size() > 9 && vertices.size() % 9 == 0);
-        int32 NumVertices = vertices.size() / 3;
-        TArray<FVector> VertexList;
-        VertexList.SetNum(NumVertices);
-        for (int32 i = 0; i < NumVertices; i++)
-            VertexList[i].Set(vertices[i * 3 + 1] * 100, vertices[i * 3 + 0] * 100, vertices[i * 3 + 2] * 100);
-
-        return BuildStaticMesh(VertexList, Outer, Name);
-    }
-
-    UStaticMesh* BuildStaticMesh(const Body_info& Node, UObject* Outer, FName Name)
-    {
-        TArray<FVector> VertexList;
-        AppendNodeMesh(Node, VertexList);
-        return BuildStaticMesh(VertexList, Outer, Name);
+        UMaterialInstanceDynamic* MaterialInstanceDynamic = UMaterialInstanceDynamic::Create(SourceMaterial, nullptr);
+        MaterialInstanceDynamic->SetVectorParameterValue(TEXT("BaseColor"), Color);
+        MaterialInstanceDynamic->SetScalarParameterValue(TEXT("Roughness"), Roughness);
+        return MaterialInstanceDynamic;
     }
 
     UMaterialInstanceDynamic* CreateMaterialInstanceDynamic(UMaterialInterface* SourceMaterial, float material[4])
     {
-        FLinearColor Color(material[0], material[1], material[2]);
-        UMaterialInstanceDynamic* MaterialInstanceDynamic = UMaterialInstanceDynamic::Create(SourceMaterial, nullptr);
-        MaterialInstanceDynamic->SetVectorParameterValue(TEXT("BaseColor"), Color);
-        MaterialInstanceDynamic->SetScalarParameterValue(TEXT("Roughness"), material[3]);
-        return MaterialInstanceDynamic;
+        return CreateMaterialInstanceDynamic(SourceMaterial, FLinearColor(material[0], material[1], material[2]), material[3]);
+    }
+}
+
+class FBuildStaticMeshTask : public FNonAbandonableTask
+{
+public:
+    FBuildStaticMeshTask(ADynamicGenActorsGameMode* InGameMode, UStaticMesh* InStaticMesh, Body_info* InNode)
+        : GameMode(InGameMode)
+        , StaticMesh(InStaticMesh)
+        , Node(InNode)
+    {
+    }
+    ~FBuildStaticMeshTask()
+    {
+        delete Node;
     }
 
+    void DoWork()
+    {
+        BuildStaticMesh(StaticMesh, *Node);
+        ADynamicGenActorsGameMode::FLoadedData LoadedData;
+        LoadedData.Name = FName(FString::FromInt(Node->dbid));
+        LoadedData.StaticMesh = StaticMesh;
+        LoadedData.Color = FLinearColor(Node->material[0], Node->material[1], Node->material[2]);
+        LoadedData.Roughness = Node->material[3];
+        GameMode->LoadedNodes.Enqueue(LoadedData);
+    }
+
+    TStatId GetStatId() const
+    {
+        return TStatId();
+    }
+
+private:
+    ADynamicGenActorsGameMode* GameMode;
+    UStaticMesh* StaticMesh;
+    Body_info* Node;
+};
+
+ADynamicGenActorsGameMode::ADynamicGenActorsGameMode()
+{
+    PrimaryActorTick.bStartWithTickEnabled = true;
+    PrimaryActorTick.bCanEverTick = true;
 }
 
 void ADynamicGenActorsGameMode::BeginPlay()
 {
     Super::BeginPlay();
 
-    std::vector<Body_info> NodeList;
-
-    FString DataFilePathName = FPaths::Combine(FPaths::ProjectDir(), TEXT("data.xsp"));
-
-#if 1
-    if (!load_file1(*DataFilePathName, NodeList))
+    //创建Actor
     {
-        FString Message = FString::Printf(TEXT("加载数据文件失败：%s"), *DataFilePathName);
-        GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Red, Message, true);
-        return;
-    }
-#else
-    // 目前多线程读文件的效率并不比单线程高，多线程的主要意义应该在StaticMesh的构造，此处测试验证多线程读取文件结果正确
-    std::vector<Header_info> HeaderList;
-    if (!load_file2(*DataFilePathName, HeaderList))
-    {
-        FString Message = FString::Printf(TEXT("加载数据文件失败：%s"), *DataFilePathName);
-        GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Red, Message, true);
-        return;
-    }
-
-    int32 Num = HeaderList.size();
-    NodeList.resize(Num);
-
-    auto ReadBodyFunc = [&DataFilePathName, &NodeList, &HeaderList](int32 i) {
-        fstream file;   //TODO:使用文件池
-        file.open(*DataFilePathName, ios::in | ios::binary, _SH_DENYWR);
-        Body_info& node = NodeList[i];
-        node.dbid = i;
-        read_body_info(file, HeaderList[i], false, node);
-    };
-
-    ParallelFor(Num, ReadBodyFunc, EParallelForFlags::None);
-#endif
-
-    {
-        FString Message = FString::Printf(TEXT("加载数据文件完成：节点数=%d"), NodeList.size());
-        GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Green, Message, true);
-    }
-
-    UMaterialInterface* SourceMaterial = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, L"/Game/DynamicGenActors/M_MainOpaque"));
-    if (!SourceMaterial)
-        return;
-
-    FString ActorName = FPaths::GetBaseFilename(DataFilePathName);
-    FActorSpawnParameters ActorSpawnParameters;
-    ActorSpawnParameters.Name = *ActorName;
-    AActor* Actor = GetWorld()->SpawnActor<AActor>(ActorSpawnParameters);
+        FActorSpawnParameters ActorSpawnParameters;
+        ActorSpawnParameters.Name = TEXT("DataActor");
+        DataActor = GetWorld()->SpawnActor<AActor>();
 #if WITH_EDITOR
-    Actor->SetActorLabel(ActorName);
+        DataActor->SetActorLabel(TEXT("DataActor"));
 #endif
-    USceneComponent* SceneComponent = NewObject<USceneComponent>(Actor, TEXT("RootComponent"));
-    Actor->SetRootComponent(SceneComponent);
-
-#if 0
-    for (size_t i = 0; i < NodeList.size(); i++)
-    {
-        Body_info& Node = NodeList[i];
-        if (Node.fragment.size() > 0)
-        {
-            bool bValidComponent = false;
-            for (size_t j = 0; j < Node.fragment.size(); j++)
-            {
-                Body_info& Fragment = Node.fragment[j];
-                if ((Fragment.name == "Mesh" && Fragment.vertices.size() > 9 && Fragment.vertices.size() % 9 == 0) ||
-                    Fragment.name == "Elliptical" || 
-                    Fragment.name == "Cylinder")
-                {
-                    bValidComponent = true;
-                    break;
-                }
-            }
-            if (!bValidComponent)
-                continue;
-
-            FName ComponentName(FString::FromInt(Node.dbid));
-            UStaticMeshComponent* StaticMeshComponent = NewObject<UStaticMeshComponent>(Actor, ComponentName);
-            UStaticMesh* StaticMesh = BuildStaticMesh(Node, StaticMeshComponent, ComponentName);
-            if (StaticMesh)
-            {
-                StaticMeshComponent->SetStaticMesh(StaticMesh);
-                StaticMeshComponent->SetMaterial(0, CreateMaterialInstanceDynamic(SourceMaterial, Node.material));
-                StaticMeshComponent->AttachToComponent(Actor->GetRootComponent(), FAttachmentTransformRules::KeepRelativeTransform);
-            }
-        }
+        USceneComponent* SceneComponent = NewObject<USceneComponent>(DataActor, TEXT("RootComponent"));
+        DataActor->SetRootComponent(SceneComponent);
     }
-#else
-    int32 NumNodes = NodeList.size();
-    TArray<UStaticMeshComponent*> StaticMeshComponentList;
-    StaticMeshComponentList.SetNumZeroed(NumNodes);
-    TArray<UStaticMesh*> StaticMeshList;
-    StaticMeshList.SetNumZeroed(NumNodes);
+
+    //加载材质模板
+    SourceMaterial = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, L"/Game/DynamicGenActors/M_MainOpaque"));
+
+    //打开数据文件，读取节点数据
+    std::vector<Body_info*> NodeDataList;
+    FString DataFilePathName = FPaths::Combine(FPaths::ProjectDir(), TEXT("data.xsp"));
+    if (!load_file(*DataFilePathName, NodeDataList))
+    {
+        FString Message = FString::Printf(TEXT("读取文件失败：%s"), *DataFilePathName);
+        GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Red, Message, true);
+        return;
+    }
+
+    NumLoadedNodes = 0;
+    NumValidNodes = 0;
+    int32 NumNodes = NodeDataList.size();
+    StaticMeshList.AddUninitialized(NumNodes);
     for (int32 i = 0; i < NumNodes; i++)
     {
-        if (IsNodeValid(NodeList[i]))
+        if (IsNodeValid(*NodeDataList[i]))
         {
-            FName ComponentName(FString::FromInt(NodeList[i].dbid));
-            StaticMeshComponentList[i] = NewObject<UStaticMeshComponent>(Actor, ComponentName);
-            StaticMeshList[i] = NewObject<UStaticMesh>(StaticMeshComponentList[i], ComponentName);
+            NumValidNodes++;
+            StaticMeshList[i] = NewObject<UStaticMesh>();
+        }
+        else
+        {
+            delete NodeDataList[i];
+            NodeDataList[i] = nullptr;
+            StaticMeshList[i] = nullptr;
         }
     }
-
-    //多线程BuildStaticMesh，测试结果相对单线程耗时有明显减少，
-    auto BuildStaticMeshFunc = [&StaticMeshList, &NodeList](int32 i) {
+    // 创建异步任务，多线程构建静态网格对象
+    for (int32 i = 0; i < NumNodes; i++)
+    {
         if (StaticMeshList[i])
-            BuildStaticMesh(StaticMeshList[i], NodeList[i]);
-    };
-    ParallelFor(NumNodes, BuildStaticMeshFunc, EParallelForFlags::None);
-
-    for (int32 i = 0; i < NumNodes; i++)
-    {
-        if (StaticMeshComponentList[i] && StaticMeshList[i])
         {
-            StaticMeshComponentList[i]->SetStaticMesh(StaticMeshList[i]);
-            StaticMeshComponentList[i]->SetMaterial(0, CreateMaterialInstanceDynamic(SourceMaterial, NodeList[i].material));
-            StaticMeshComponentList[i]->AttachToComponent(Actor->GetRootComponent(), FAttachmentTransformRules::KeepRelativeTransform);
+            (new FAutoDeleteAsyncTask<FBuildStaticMeshTask>(this, StaticMeshList[i], NodeDataList[i]))->StartBackgroundTask();
         }
     }
-#endif
+}
 
-    Actor->RegisterAllComponents();
+void ADynamicGenActorsGameMode::Tick(float DeltaSeconds)
+{
+    Super::Tick(DeltaSeconds);
+
+    static bool bFinished = false;
+    if (!bFinished)
+    {
+        if (NumLoadedNodes < NumValidNodes)
+        {
+            int64 BeginTicks = FDateTime::Now().GetTicks();
+
+            // 从完成队列取出静态网格加入场景
+            FLoadedData LoadedData;
+            while (LoadedNodes.Dequeue(LoadedData))
+            {
+                UStaticMeshComponent* StaticMeshComponent = NewObject<UStaticMeshComponent>(DataActor, LoadedData.Name);
+                StaticMeshComponent->SetStaticMesh(LoadedData.StaticMesh);
+                StaticMeshComponent->SetMaterial(0, CreateMaterialInstanceDynamic(SourceMaterial, LoadedData.Color, LoadedData.Roughness));
+                StaticMeshComponent->AttachToComponent(DataActor->GetRootComponent(), FAttachmentTransformRules::KeepRelativeTransform);
+                StaticMeshComponent->RegisterComponent();
+                NumLoadedNodes++;
+
+                FString Message = FString::Printf(TEXT("加载中 (%d / %d) ..."), NumLoadedNodes, NumValidNodes);
+                GEngine->AddOnScreenDebugMessage(0, 5.0f, FColor::Red, Message, true);
+
+                // 每帧最多给0.07秒用于合并新网格到场景中，以保证一定的帧率
+                if ((float)(FDateTime::Now().GetTicks() - BeginTicks) / ETimespan::TicksPerSecond >= 0.07f)
+                    break;
+            }
+        }
+        else
+        {
+            bFinished = true;
+
+            FString Message = FString::Printf(TEXT("加载完成 (%d)"), NumLoadedNodes);
+            GEngine->AddOnScreenDebugMessage(0, 10.0f, FColor::Green, Message, true);
+        }
+    }
 }
