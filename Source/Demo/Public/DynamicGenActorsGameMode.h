@@ -21,9 +21,11 @@ public:
 	virtual void Tick(float deltaSeconds) override;
 
 private:
+	// 材质模板
 	UPROPERTY()
 	class UMaterialInterface* SourceMaterial;
 
+	// 动态加载的Actor
 	UPROPERTY()
 	AActor* DataActor;
 

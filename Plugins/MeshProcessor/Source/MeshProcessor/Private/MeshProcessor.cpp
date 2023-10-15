@@ -110,7 +110,7 @@ void CombineStaticMeshes(UObject* Outer, FString OutAssetName, class UDataTable*
     NewStaticMesh->InitResources();
     NewStaticMesh->PreEditChange(nullptr);
 
-    //合并的RawMesh设置给新建的静态网格资产
+    //合并的RawMesh设置给新建的静态网格资产，只设置LOD0
     FStaticMeshSourceModel& AddedSrcModel = NewStaticMesh->AddSourceModel();
     AddedSrcModel.BuildSettings.bRecomputeNormals = false;
     AddedSrcModel.BuildSettings.bRecomputeTangents = false;

@@ -11,6 +11,8 @@
 #include <fstream>
 #include <vector>
 
+DEFINE_LOG_CATEGORY_STATIC(LogDynamicGenActorsDemo, Log, All);
+
 namespace
 {
     struct Body_info
@@ -150,23 +152,35 @@ namespace
         return load_file(file, node_list);
     }
 
-    bool IsNodeValid(const Body_info& Node)
+    bool CheckNode(const Body_info& Node)
     {
+        bool bValid = false;
         for (size_t j = 0; j < Node.fragment.size(); j++)
         {
             const Body_info& Fragment = Node.fragment[j];
-            if ((Fragment.name == "Mesh" && Fragment.vertices.size() > 9 && Fragment.vertices.size() % 9 == 0) ||
+            if ((Fragment.name == "Mesh") ||
                 Fragment.name == "Elliptical" ||
                 Fragment.name == "Cylinder")
             {
-                return true;
+                bValid = true;
+            }
+            else if (Fragment.name == "Line" || Fragment.name == "Point")
+            {
+                UE_LOG(LogDynamicGenActorsDemo, Display, TEXT("未处理的图元类型: %s"), *FString(Fragment.name.c_str()));
+            }
+            else
+            {
+                UE_LOG(LogDynamicGenActorsDemo, Warning, TEXT("未处理的图元类型: %s"), *FString(Fragment.name.c_str()));
             }
         }
-        return false;
+        return bValid;
     }
 
+    //网格体
     void AppendRawMesh(const std::vector<float>& vertices, TArray<FVector>& VertexList)
     {
+        check(vertices.size() > 9 && vertices.size() % 9 == 0);
+
         int32 Index = VertexList.Num();
         int32 NumMeshVertices = vertices.size() / 3;
         if (NumMeshVertices > 3 && NumMeshVertices % 3 == 0)
@@ -177,20 +191,83 @@ namespace
         }
     }
 
+    //椭圆形？
     void AppendEllipticalMesh(const std::vector<float>& vertices, TArray<FVector>& VertexList)
     {
         int32 Index = VertexList.Num();
 
         //[origin，xVector，yVector，radius]
-        //TODO:
+        FVector Origin(vertices[1], vertices[0], vertices[2]);
+        FVector BottomCenter(vertices[4], vertices[3], vertices[5]);
+        FVector DirX(vertices[7], vertices[6], vertices[8]);
+        float Radius = vertices[9];
     }
 
+    //圆柱体
     void AppendCylinderMesh(const std::vector<float>& vertices, TArray<FVector>& VertexList)
     {
-        int32 Index = VertexList.Num();
+        static const int32 NumSegments = 18;
+        float DeltaAngle = UE_TWO_PI / NumSegments;
 
         //[topCenter，bottomCenter，xAxis，yAxis，radius]
-        //TODO:
+        FVector TopCenter(vertices[1], vertices[0], vertices[2]);
+        FVector BottomCenter(vertices[4], vertices[3], vertices[5]);
+        //FVector DirX(vertices[7], vertices[6], vertices[8]);
+        //FVector DirY(vertices[10], vertices[9], vertices[11]);
+        float Radius = vertices[12];
+
+        //轴向
+        FVector UpDir = TopCenter - BottomCenter;
+        float Height = UpDir.Length();
+        UpDir.Normalize();
+
+        //计算径向
+        FVector RightDir;
+        if (UpDir.Z > UE_SQRT_3 / 3)
+            RightDir.Set(1, 0, 0);
+        else
+            RightDir.Set(UpDir.X, UpDir.Y, 0);
+        RightDir.Normalize();
+        FVector RadialDir = FVector::CrossProduct(RightDir, UpDir);
+        RadialDir.Normalize();
+
+        //沿径向的一圈向量
+        TArray<FVector> RoundDirections;
+        RoundDirections.SetNumUninitialized(NumSegments + 1);
+        for (int32 i = 0; i <= NumSegments; i++)
+        {
+            RoundDirections[i] = RadialDir.RotateAngleAxisRad(DeltaAngle * i, UpDir) * Radius;
+        }
+        
+        TArray<FVector> CylinderMeshVertices;
+        CylinderMeshVertices.SetNumUninitialized(NumSegments*12);
+        int32 Index = 0;
+        //顶面
+        for (int32 i = 0; i < NumSegments; i++)
+        {
+            CylinderMeshVertices[Index++] = TopCenter;
+            CylinderMeshVertices[Index++] = TopCenter + RoundDirections[i];
+            CylinderMeshVertices[Index++] = TopCenter + RoundDirections[i+1];
+        }
+        //底面
+        for (int32 i = 0; i < NumSegments; i++)
+        {
+            CylinderMeshVertices[Index++] = BottomCenter;
+            CylinderMeshVertices[Index++] = BottomCenter + RoundDirections[i + 1];
+            CylinderMeshVertices[Index++] = BottomCenter + RoundDirections[i];
+        }
+        //侧面
+        for (int32 i = 0; i < NumSegments; i++)
+        {
+            CylinderMeshVertices[Index++] = TopCenter + RoundDirections[i];
+            CylinderMeshVertices[Index++] = BottomCenter + RoundDirections[i];
+            CylinderMeshVertices[Index++] = BottomCenter + RoundDirections[i + 1];
+            CylinderMeshVertices[Index++] = TopCenter + RoundDirections[i];
+            CylinderMeshVertices[Index++] = BottomCenter + RoundDirections[i + 1];
+            CylinderMeshVertices[Index++] = TopCenter + RoundDirections[i + 1];
+        }
+
+        VertexList.Append(CylinderMeshVertices);
     }
 
     void AppendNodeMesh(const Body_info& Node, TArray<FVector>& VertexList)
@@ -214,7 +291,7 @@ namespace
 
     void BuildStaticMesh(UStaticMesh* StaticMesh, const TArray<FVector>& VertexList)
     {
-        StaticMesh->GetStaticMaterials().Add(FStaticMaterial());//至少添加一个材质
+        StaticMesh->GetStaticMaterials().Add(FStaticMaterial());
 
         FMeshDescription MeshDesc;
         FStaticMeshAttributes Attributes(MeshDesc);
@@ -270,13 +347,9 @@ namespace
         MaterialInstanceDynamic->SetScalarParameterValue(TEXT("Roughness"), Roughness);
         return MaterialInstanceDynamic;
     }
-
-    UMaterialInstanceDynamic* CreateMaterialInstanceDynamic(UMaterialInterface* SourceMaterial, float material[4])
-    {
-        return CreateMaterialInstanceDynamic(SourceMaterial, FLinearColor(material[0], material[1], material[2]), material[3]);
-    }
 }
 
+// 异步构建静态网格数据的任务类
 class FBuildStaticMeshTask : public FNonAbandonableTask
 {
 public:
@@ -293,7 +366,10 @@ public:
 
     void DoWork()
     {
+        // 构建静态网格
         BuildStaticMesh(StaticMesh, *Node);
+
+        // 完成构建的数据推送到待合并队列，在Game线程合并进场景
         ADynamicGenActorsGameMode::FLoadedData LoadedData;
         LoadedData.Name = FName(FString::FromInt(Node->dbid));
         LoadedData.StaticMesh = StaticMesh;
@@ -337,6 +413,10 @@ void ADynamicGenActorsGameMode::BeginPlay()
 
     //加载材质模板
     SourceMaterial = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, L"/Game/DynamicGenActors/M_MainOpaque"));
+    if (!SourceMaterial)
+    {
+        UE_LOG(LogDynamicGenActorsDemo, Error, TEXT("加载材质模板失败"));
+    }
 
     //打开数据文件，读取节点数据
     std::vector<Body_info*> NodeDataList;
@@ -345,6 +425,7 @@ void ADynamicGenActorsGameMode::BeginPlay()
     {
         FString Message = FString::Printf(TEXT("读取文件失败：%s"), *DataFilePathName);
         GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Red, Message, true);
+        UE_LOG(LogDynamicGenActorsDemo, Error, TEXT("%s"), *Message);
         return;
     }
 
@@ -354,13 +435,15 @@ void ADynamicGenActorsGameMode::BeginPlay()
     StaticMeshList.AddUninitialized(NumNodes);
     for (int32 i = 0; i < NumNodes; i++)
     {
-        if (IsNodeValid(*NodeDataList[i]))
+        if (CheckNode(*NodeDataList[i]))
         {
             NumValidNodes++;
+            // 必须在Game线程创建UObject派生对象
             StaticMeshList[i] = NewObject<UStaticMesh>();
         }
         else
         {
+            // 释放空的Node对象
             delete NodeDataList[i];
             NodeDataList[i] = nullptr;
             StaticMeshList[i] = nullptr;
