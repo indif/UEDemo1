@@ -179,7 +179,7 @@ namespace
     //网格体
     void AppendRawMesh(const std::vector<float>& vertices, TArray<FVector>& VertexList)
     {
-        check(vertices.size() > 9 && vertices.size() % 9 == 0);
+        check(vertices.size() >= 9 && vertices.size() % 9 == 0);
 
         int32 Index = VertexList.Num();
         int32 NumMeshVertices = vertices.size() / 3;
@@ -191,30 +191,56 @@ namespace
         }
     }
 
-    //椭圆形？
+    //椭圆形
     void AppendEllipticalMesh(const std::vector<float>& vertices, TArray<FVector>& VertexList)
     {
-        int32 Index = VertexList.Num();
+        check(vertices.size() == 10);
+
+        static const int32 NumSegments = 18;
+        float DeltaAngle = UE_TWO_PI / NumSegments;
 
         //[origin，xVector，yVector，radius]
-        FVector Origin(vertices[1], vertices[0], vertices[2]);
-        FVector BottomCenter(vertices[4], vertices[3], vertices[5]);
-        FVector DirX(vertices[7], vertices[6], vertices[8]);
-        float Radius = vertices[9];
+        FVector Origin(vertices[1] * 100, vertices[0] * 100, vertices[2] * 100);
+        FVector XVector(vertices[4], vertices[3], vertices[5]); //单位方向向量?
+        FVector YVector(vertices[7], vertices[6], vertices[8]);
+        float Radius = vertices[9] * 100;
+
+        //沿径向的一圈向量
+        TArray<FVector> RadialVectors;
+        RadialVectors.SetNumUninitialized(NumSegments + 1);
+        for (int32 i = 0; i <= NumSegments; i++)
+        {
+            RadialVectors[i] = XVector * Radius * FMath::Sin(DeltaAngle * i) + YVector * Radius * FMath::Cos(DeltaAngle * i);
+        }
+
+        //椭圆面
+        TArray<FVector> EllipticalMeshVertices;
+        EllipticalMeshVertices.SetNumUninitialized(NumSegments * 3);
+        int32 Index = 0;
+        for (int32 i = 0; i < NumSegments; i++)
+        {
+            EllipticalMeshVertices[Index++] = Origin;
+            EllipticalMeshVertices[Index++] = Origin + RadialVectors[i + 1];
+            EllipticalMeshVertices[Index++] = Origin + RadialVectors[i];
+        }
+
+        VertexList.Append(EllipticalMeshVertices);
     }
 
     //圆柱体
     void AppendCylinderMesh(const std::vector<float>& vertices, TArray<FVector>& VertexList)
     {
+        check(vertices.size() == 13);
+
         static const int32 NumSegments = 18;
         float DeltaAngle = UE_TWO_PI / NumSegments;
 
         //[topCenter，bottomCenter，xAxis，yAxis，radius]
-        FVector TopCenter(vertices[1], vertices[0], vertices[2]);
-        FVector BottomCenter(vertices[4], vertices[3], vertices[5]);
-        //FVector DirX(vertices[7], vertices[6], vertices[8]);
-        //FVector DirY(vertices[10], vertices[9], vertices[11]);
-        float Radius = vertices[12];
+        FVector TopCenter(vertices[1] * 100, vertices[0] * 100, vertices[2] * 100);
+        FVector BottomCenter(vertices[4] * 100, vertices[3] * 100, vertices[5] * 100);
+        //FVector DirX(vertices[7] * 100, vertices[6] * 100, vertices[8] * 100);
+        //FVector DirY(vertices[10] * 100, vertices[9] * 100, vertices[11] * 100);
+        float Radius = vertices[12] * 100;
 
         //轴向
         FVector UpDir = TopCenter - BottomCenter;
@@ -232,39 +258,39 @@ namespace
         RadialDir.Normalize();
 
         //沿径向的一圈向量
-        TArray<FVector> RoundDirections;
-        RoundDirections.SetNumUninitialized(NumSegments + 1);
+        TArray<FVector> RadialVectors;
+        RadialVectors.SetNumUninitialized(NumSegments + 1);
         for (int32 i = 0; i <= NumSegments; i++)
         {
-            RoundDirections[i] = RadialDir.RotateAngleAxisRad(DeltaAngle * i, UpDir) * Radius;
+            RadialVectors[i] = RadialDir.RotateAngleAxisRad(DeltaAngle * i, UpDir) * Radius;
         }
         
         TArray<FVector> CylinderMeshVertices;
-        CylinderMeshVertices.SetNumUninitialized(NumSegments*12);
+        CylinderMeshVertices.SetNumUninitialized(NumSegments*6);
         int32 Index = 0;
-        //顶面
-        for (int32 i = 0; i < NumSegments; i++)
-        {
-            CylinderMeshVertices[Index++] = TopCenter;
-            CylinderMeshVertices[Index++] = TopCenter + RoundDirections[i];
-            CylinderMeshVertices[Index++] = TopCenter + RoundDirections[i+1];
-        }
-        //底面
-        for (int32 i = 0; i < NumSegments; i++)
-        {
-            CylinderMeshVertices[Index++] = BottomCenter;
-            CylinderMeshVertices[Index++] = BottomCenter + RoundDirections[i + 1];
-            CylinderMeshVertices[Index++] = BottomCenter + RoundDirections[i];
-        }
+        ////顶面
+        //for (int32 i = 0; i < NumSegments; i++)
+        //{
+        //    CylinderMeshVertices[Index++] = TopCenter;
+        //    CylinderMeshVertices[Index++] = TopCenter + RadialVectors[i + 1];
+        //    CylinderMeshVertices[Index++] = TopCenter + RadialVectors[i];
+        //}
+        ////底面
+        //for (int32 i = 0; i < NumSegments; i++)
+        //{
+        //    CylinderMeshVertices[Index++] = BottomCenter;
+        //    CylinderMeshVertices[Index++] = BottomCenter + RadialVectors[i];
+        //    CylinderMeshVertices[Index++] = BottomCenter + RadialVectors[i + 1];
+        //}
         //侧面
         for (int32 i = 0; i < NumSegments; i++)
         {
-            CylinderMeshVertices[Index++] = TopCenter + RoundDirections[i];
-            CylinderMeshVertices[Index++] = BottomCenter + RoundDirections[i];
-            CylinderMeshVertices[Index++] = BottomCenter + RoundDirections[i + 1];
-            CylinderMeshVertices[Index++] = TopCenter + RoundDirections[i];
-            CylinderMeshVertices[Index++] = BottomCenter + RoundDirections[i + 1];
-            CylinderMeshVertices[Index++] = TopCenter + RoundDirections[i + 1];
+            CylinderMeshVertices[Index++] = BottomCenter + RadialVectors[i];
+            CylinderMeshVertices[Index++] = TopCenter + RadialVectors[i];
+            CylinderMeshVertices[Index++] = BottomCenter + RadialVectors[i + 1];
+            CylinderMeshVertices[Index++] = BottomCenter + RadialVectors[i + 1];
+            CylinderMeshVertices[Index++] = TopCenter + RadialVectors[i];
+            CylinderMeshVertices[Index++] = TopCenter + RadialVectors[i + 1];
         }
 
         VertexList.Append(CylinderMeshVertices);
@@ -330,7 +356,9 @@ namespace
         TArray<const FMeshDescription*> MeshDescPtrs;
         MeshDescPtrs.Emplace(&MeshDesc);
 
+        //StaticMesh->SetNumSourceModels(3);
         StaticMesh->BuildFromMeshDescriptions(MeshDescPtrs, BuildParams);
+        //StaticMesh->Build();
     }
 
     void BuildStaticMesh(UStaticMesh* StaticMesh, const Body_info& Node)
@@ -449,7 +477,8 @@ void ADynamicGenActorsGameMode::BeginPlay()
             StaticMeshList[i] = nullptr;
         }
     }
-    // 创建异步任务，多线程构建静态网格对象
+
+#if 1 //异步多线程构建静态网格对象
     for (int32 i = 0; i < NumNodes; i++)
     {
         if (StaticMeshList[i])
@@ -457,6 +486,25 @@ void ADynamicGenActorsGameMode::BeginPlay()
             (new FAutoDeleteAsyncTask<FBuildStaticMeshTask>(this, StaticMeshList[i], NodeDataList[i]))->StartBackgroundTask();
         }
     }
+#else //Game线程构建静态网格对象
+    for (int32 i = 0; i < NumNodes; i++)
+    {
+        UStaticMesh* StaticMesh = StaticMeshList[i];
+        if (StaticMesh)
+        {
+            Body_info* Node = NodeDataList[i];
+
+            BuildStaticMesh(StaticMesh, *Node);
+
+            ADynamicGenActorsGameMode::FLoadedData LoadedData;
+            LoadedData.Name = FName(FString::FromInt(Node->dbid));
+            LoadedData.StaticMesh = StaticMesh;
+            LoadedData.Color = FLinearColor(Node->material[0], Node->material[1], Node->material[2]);
+            LoadedData.Roughness = Node->material[3];
+            LoadedNodes.Enqueue(LoadedData);
+        }
+    }
+#endif
 }
 
 void ADynamicGenActorsGameMode::Tick(float DeltaSeconds)
