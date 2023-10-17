@@ -12,6 +12,9 @@
 #include <fstream>
 #include <vector>
 
+
+#define BUILD_MESH_ASYNC 1
+
 DEFINE_LOG_CATEGORY_STATIC(LogDynamicGenActorsDemo, Log, All);
 
 struct Body_info
@@ -242,7 +245,7 @@ void AppendRawMesh(const std::vector<float>& vertices, TArray<FVector>& VertexLi
 
     int32 Index = VertexList.Num();
     int32 NumMeshVertices = vertices.size() / 3;
-    if (NumMeshVertices > 3 && NumMeshVertices % 3 == 0)
+    if (NumMeshVertices >=3 && NumMeshVertices % 3 == 0)
     {
         VertexList.AddUninitialized(NumMeshVertices);
         for (size_t j = 0, j_len = vertices.size(); j < j_len; j += 3)
@@ -305,10 +308,10 @@ void AppendCylinderMesh(const std::vector<float>& vertices, TArray<FVector>& Ver
     FVector UpDir = TopCenter - BottomCenter;
     float Height = UpDir.Length();
     UpDir.Normalize();
-
+    
     //计算径向
     FVector RightDir;
-    if (UpDir.Z > UE_SQRT_3 / 3)
+    if (FMath::Abs(UpDir.Z) > UE_SQRT_3 / 3)
         RightDir.Set(1, 0, 0);
     else
         RightDir.Set(0, 0, 1);
@@ -424,6 +427,11 @@ void BuildStaticMesh(UStaticMesh* StaticMesh, const Body_info& Node)
 {
     TArray<FVector> VertexList;
     AppendNodeMesh(Node, VertexList);
+    if (VertexList.Num() < 3)
+    {
+        checkNoEntry();
+        return;
+    }
     BuildStaticMesh(StaticMesh, VertexList);
 }
 
@@ -604,7 +612,7 @@ void ADynamicGenActorsGameMode::LoadScene()
         }
     }
 
-#if 1 //异步多线程构建静态网格对象
+#if BUILD_MESH_ASYNC //异步多线程构建静态网格对象
     for (int32 i = 0; i < NumNodes; i++)
     {
         if (StaticMeshList[i])
