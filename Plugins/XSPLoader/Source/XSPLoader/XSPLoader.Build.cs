@@ -38,8 +38,10 @@ public class XSPLoader : ModuleRules
 				"Engine",
 				"Slate",
 				"SlateCore",
-				// ... add private dependencies that you statically link with here ...	
-			}
+                "MeshConversion",
+                "MeshDescription",
+                "StaticMeshDescription",
+            }
 			);
 		
 		

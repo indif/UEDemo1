@@ -4,25 +4,28 @@
 
 #define LOCTEXT_NAMESPACE "FXSPLoaderModule"
 
-static FXSPLoader GXSPLoader;
 
 void FXSPLoaderModule::StartupModule()
 {
-	TickerHandle = FTSTicker::GetCoreTicker().AddTicker(TEXT("XSPLoader"), 0.0f, [this](float DeltaTime)
+	FXSPLoader* TempXSPLoader = new FXSPLoader;
+	TickerHandle = FTSTicker::GetCoreTicker().AddTicker(TEXT("XSPLoader"), 0.0f, [TempXSPLoader](float DeltaTime)
 		{
-			GXSPLoader.Tick(DeltaTime);
+			TempXSPLoader->Tick(DeltaTime);
 			return true;
 		});
+	XSPLoader = TempXSPLoader;
 }
 
 void FXSPLoaderModule::ShutdownModule()
 {
 	FTSTicker::GetCoreTicker().RemoveTicker(TickerHandle);
+	delete XSPLoader;
+	XSPLoader = nullptr;
 }
 
 IXSPLoader& FXSPLoaderModule::Get() const
 {
-	return GXSPLoader;
+	return *XSPLoader;
 }
 
 #undef LOCTEXT_NAMESPACE

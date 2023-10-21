@@ -10,11 +10,13 @@
 class IXSPLoader
 {
 public:
+	virtual ~IXSPLoader() {};
+
 	/**
-	 *	设置数据源文件列表
-	 *	@param	FilePathNameArray [in]	xsp文件数组，按dbid顺序排列
+	 *	初始化
+	 *	@param	FilePathNameArray [in]	数据源文件数组，按dbid顺序排列
 	 */
-	virtual void SetSourceFiles(const TArray<FString>& FilePathNameArray) = 0;
+	virtual bool Init(const TArray<FString>& FilePathNameArray) = 0;
 
 	/**
 	 *	请求静态网格数据（数据加载完毕后会自动设置到目标组件上）

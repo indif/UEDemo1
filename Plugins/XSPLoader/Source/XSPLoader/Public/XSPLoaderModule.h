@@ -19,4 +19,5 @@ public:
 
 private:
 	FTSTicker::FDelegateHandle TickerHandle;
+	IXSPLoader* XSPLoader = nullptr;
 };
