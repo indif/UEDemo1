@@ -51,6 +51,8 @@ struct FStaticMeshRequest
 		, Priority(InPriority)
 		, LastUpdateFrameNumber(-1)
 		, bValid(true)
+		, Color(1,1,1)
+		, Roughness(1)
 		, TargetComponent(InTargetComponent)
 	{}
 
@@ -171,7 +173,8 @@ public:
 
 private:
 	void DispatchNewRequests(uint64 InFrameNumber);
-	void ProcessMergeRequests();
+	void ProcessMergeRequests(float AvailableTime);
+	void PruneRequests(uint64 InFrameNumber);
 
 private:
 	bool bInitialized = false;
@@ -187,7 +190,7 @@ private:
 		FRunnableThread* LoadThread = nullptr;
 		FRequestQueue LoadRequestQueue;
 	};
-	TArray<FSourceData*> SourDataList;
+	TArray<FSourceData*> SourceDataList;
 
 	// 材质模板
 	TStrongObjectPtr<UMaterialInterface> SourceMaterial;
@@ -211,4 +214,6 @@ private:
 	FCriticalSection CachedRequestArrayCS;
 
 	FCriticalSection RequestCS;
+
+	friend struct FRequestQueue;
 };

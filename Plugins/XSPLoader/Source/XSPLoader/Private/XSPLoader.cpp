@@ -370,17 +370,48 @@ void FStaticMeshRequest::Invalidate()
 
 void FRequestQueue::Add(TSharedPtr<FStaticMeshRequest>& Request)
 {
-
+    FScopeLock Lock(&RequestListCS);
+    AddNoLock(Request);
 }
 
 void FRequestQueue::AddNoLock(TSharedPtr<FStaticMeshRequest>& Request)
 {
-
+    RequestList.Emplace(Request);
 }
 
 void FRequestQueue::TakeFirst(TSharedPtr<FStaticMeshRequest>& Request)
 {
+    FScopeLock Lock(&RequestListCS);
 
+    Request.Reset();
+    if (!RequestList.IsEmpty())
+    {
+        FSortRequestFunctor HighPriority;
+
+        uint64 FrameNumber = Loader->FrameNumber.load();
+
+        for (FRequestList::TIterator Itr(RequestList); Itr; ++Itr)
+        {
+            FScopeLock RequestLock(&Loader->RequestCS);
+            if ((*Itr)->IsRequestCurrent(FrameNumber))
+            {
+                if (!Request.IsValid() || HighPriority(*Itr, Request))
+                {
+                    Request = *Itr;
+                }
+            }
+            else
+            {
+                (*Itr)->Invalidate();
+                Itr.RemoveCurrent();
+            }
+        }
+
+        if (Request.IsValid())
+        {
+            RequestList.Remove(Request);
+        }
+    }
 }
 
 bool FRequestQueue::IsEmpty()
@@ -390,13 +421,14 @@ bool FRequestQueue::IsEmpty()
 
 void FRequestQueue::Swap(FRequestList& OutRequestList)
 {
-
+    FScopeLock Lock(&RequestListCS);
+    OutRequestList = MoveTemp(RequestList);
 }
 
 void FBuildStaticMeshTask::DoWork()
 {
     BuildStaticMesh(Request->StaticMesh.Get(), NodeData);
-
+    Request->TargetComponent->SetStaticMesh(Request->StaticMesh.Get());
     MergeRequestQueue.Add(Request);
 }
 
@@ -461,10 +493,9 @@ uint32 FXSPFileLoadRunnalbe::Run()
     return 0;
 }
 
-
 FXSPLoader::FXSPLoader()
 {
-
+    MergeRequestQueue.Loader = this;
 }
 
 FXSPLoader::~FXSPLoader()
@@ -483,11 +514,12 @@ bool FXSPLoader::Init(const TArray<FString>& FilePathNameArray)
 
     int32 TotalNumNodes = 0;
     bool bFail = false;
-    SourDataList.SetNum(NumFiles);
+    SourceDataList.SetNum(NumFiles);
     for (int32 i = 0; i < NumFiles; ++i)
     {
-        SourDataList[i] = new FSourceData;
-        std::fstream& FileStream = SourDataList[i]->FileStream;
+        SourceDataList[i] = new FSourceData;
+        SourceDataList[i]->LoadRequestQueue.Loader = this;
+        std::fstream& FileStream = SourceDataList[i]->FileStream;
         FileStream.open(std::wstring(*FilePathNameArray[i]), std::ios::in | std::ios::binary);
         if (!FileStream.is_open())
         {
@@ -500,8 +532,8 @@ bool FXSPLoader::Init(const TArray<FString>& FilePathNameArray)
         int NumNodes;
         FileStream.read((char*)&NumNodes, sizeof(NumNodes));
         
-        SourDataList[i]->StartDbid = TotalNumNodes;
-        SourDataList[i]->Count = NumNodes;
+        SourceDataList[i]->StartDbid = TotalNumNodes;
+        SourceDataList[i]->Count = NumNodes;
         TotalNumNodes += NumNodes;
     }
     if (bFail)
@@ -516,11 +548,12 @@ bool FXSPLoader::Init(const TArray<FString>& FilePathNameArray)
     for (int32 i = 0; i < NumFiles; ++i)
     {
         FString ThreadName = FString::Printf(TEXT("XSPFileLoader_%d"), i);
-        SourDataList[i]->FileLoadRunnable = new FXSPFileLoadRunnalbe(SourDataList[i]->FileStream, SourDataList[i]->StartDbid, SourDataList[i]->Count, SourDataList[i]->LoadRequestQueue, MergeRequestQueue);
-        SourDataList[i]->LoadThread = FRunnableThread::Create(SourDataList[i]->FileLoadRunnable, *ThreadName, 8 * 1024, TPri_Normal);
+        SourceDataList[i]->FileLoadRunnable = new FXSPFileLoadRunnalbe(SourceDataList[i]->FileStream, SourceDataList[i]->StartDbid, SourceDataList[i]->Count, SourceDataList[i]->LoadRequestQueue, MergeRequestQueue);
+        SourceDataList[i]->LoadThread = FRunnableThread::Create(SourceDataList[i]->FileLoadRunnable, *ThreadName, 8 * 1024, TPri_Normal);
     }
 
     bInitialized = true;
+    FrameNumber.store(0);
 
     return true;
 }
@@ -538,14 +571,19 @@ void FXSPLoader::Tick(float DeltaTime)
 
     uint64 CurrentFrameNumber = FrameNumber.fetch_add(1);
 
+    int64 BeginTicks = FDateTime::Now().GetTicks();
     DispatchNewRequests(CurrentFrameNumber);
+    float UsedTime = (float)(FDateTime::Now().GetTicks() - BeginTicks) / ETimespan::TicksPerSecond;
 
-    ProcessMergeRequests();
+    float AvailableTime = 0.1f - UsedTime;
+    ProcessMergeRequests(AvailableTime);
+
+    PruneRequests(CurrentFrameNumber);
 }
 
 void FXSPLoader::Reset()
 {
-    for (auto SourceDataPtr : SourDataList)
+    for (auto SourceDataPtr : SourceDataList)
     {
         if (nullptr != SourceDataPtr->LoadThread)
         {
@@ -562,7 +600,7 @@ void FXSPLoader::Reset()
         }
         delete SourceDataPtr;
     }
-    SourDataList.Empty();
+    SourceDataList.Empty();
 }
 
 void FXSPLoader::DispatchNewRequests(uint64 InFrameNumber)
@@ -592,7 +630,7 @@ void FXSPLoader::DispatchNewRequests(uint64 InFrameNumber)
             TempRequest->LastUpdateFrameNumber = InFrameNumber;
             AllRequestMap.Emplace(Dbid, TempRequest);
             //根据Dbid分发到相应的请求队列
-            for (auto SourceDataPtr : SourDataList)
+            for (auto SourceDataPtr : SourceDataList)
             {
                 if (Dbid >= SourceDataPtr->StartDbid && Dbid < SourceDataPtr->StartDbid + SourceDataPtr->Count)
                 {
@@ -604,8 +642,9 @@ void FXSPLoader::DispatchNewRequests(uint64 InFrameNumber)
     }
 }
 
-void FXSPLoader::ProcessMergeRequests()
+void FXSPLoader::ProcessMergeRequests(float AvailableTime)
 {
+    int64 BeginTicks = FDateTime::Now().GetTicks();
     while (!MergeRequestQueue.IsEmpty())
     {
         TSharedPtr<FStaticMeshRequest> Request;
@@ -613,10 +652,26 @@ void FXSPLoader::ProcessMergeRequests()
         if (Request.IsValid() && Request->IsValid())
         {
             Request->TargetComponent->SetMaterial(0, CreateMaterialInstanceDynamic(SourceMaterial.Get(), Request->Color, Request->Roughness));
-            Request->TargetComponent->SetStaticMesh(Request->StaticMesh.Get());
-            //Request->TargetComponent->RegisterComponent();
+            //Request->TargetComponent->SetStaticMesh(Request->StaticMesh.Get());
+            Request->TargetComponent->RegisterComponent();
         }
 
+        //最终完成的请求,从总Map中移除
         AllRequestMap.Remove(Request->Dbid);
+
+        if ((float)(FDateTime::Now().GetTicks() - BeginTicks) / ETimespan::TicksPerSecond >= AvailableTime)
+            break;
+    }
+}
+
+void FXSPLoader::PruneRequests(uint64 InFrameNumber)
+{
+    for (TMap<int32, TSharedPtr<FStaticMeshRequest>>::TIterator Itr(AllRequestMap); Itr; ++Itr)
+    {
+        if (!Itr.Value()->IsRequestCurrent(InFrameNumber))
+        {
+            Itr.Value()->Invalidate();
+            Itr.RemoveCurrent();
+        }
     }
 }
