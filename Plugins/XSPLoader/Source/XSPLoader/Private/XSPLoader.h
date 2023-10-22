@@ -43,10 +43,11 @@ struct FStaticMeshRequest
 	bool bValid;
 	FLinearColor Color;
 	float Roughness;
-	TWeakObjectPtr<UStaticMeshComponent> TargetComponent;
+	UStaticMeshComponent* TargetComponent;
 	TStrongObjectPtr<UStaticMesh> StaticMesh;
+	std::atomic_bool bReleasable;
 
-	FStaticMeshRequest(int32 InDbid, float InPriority, TWeakObjectPtr<UStaticMeshComponent>& InTargetComponent)
+	FStaticMeshRequest(int32 InDbid, float InPriority, UStaticMeshComponent* InTargetComponent)
 		: Dbid(InDbid)
 		, Priority(InPriority)
 		, LastUpdateFrameNumber(-1)
@@ -54,21 +55,19 @@ struct FStaticMeshRequest
 		, Color(1,1,1)
 		, Roughness(1)
 		, TargetComponent(InTargetComponent)
+		, bReleasable(false)
 	{}
 
 	void Invalidate();
 
 	bool IsValid() { return bValid; }
 
-	bool IsRequestCurrent(uint64 FrameNumber)
-	{
-		return bValid && (FrameNumber - LastUpdateFrameNumber <= 1);
-	}
+	bool IsRequestCurrent(uint64 FrameNumber);
 };
 
 struct FSortRequestFunctor
 {
-	bool operator() (const TSharedPtr<FStaticMeshRequest>& Lhs, const TSharedPtr<FStaticMeshRequest>& Rhs) const
+	bool operator() (FStaticMeshRequest* Lhs, FStaticMeshRequest* Rhs) const
 	{
 		if (Lhs->LastUpdateFrameNumber > Rhs->LastUpdateFrameNumber) return true;
 		else if (Lhs->LastUpdateFrameNumber < Rhs->LastUpdateFrameNumber) return false;
@@ -79,15 +78,15 @@ struct FSortRequestFunctor
 struct FRequestQueue
 {
 public:
-	void Add(TSharedPtr<FStaticMeshRequest>& Request);
+	void Add(FStaticMeshRequest* Request);
 
-	void AddNoLock(TSharedPtr<FStaticMeshRequest>& Request);
+	void AddNoLock(FStaticMeshRequest* Request);
 
-	void TakeFirst(TSharedPtr<FStaticMeshRequest>& Request);
+	void TakeFirst(FStaticMeshRequest*& Request);
 
 	bool IsEmpty();
 
-	typedef TArray<TSharedPtr<FStaticMeshRequest>> FRequestList;
+	typedef TArray<FStaticMeshRequest*> FRequestList;
 	void Swap(FRequestList& RequestList);
 
 	FRequestList RequestList;
@@ -99,7 +98,7 @@ public:
 class FBuildStaticMeshTask : public FNonAbandonableTask
 {
 public:
-	FBuildStaticMeshTask(TSharedPtr<FStaticMeshRequest> InRequest, Body_info& InNodeData, FRequestQueue& MergeQueue)
+	FBuildStaticMeshTask(FStaticMeshRequest* InRequest, Body_info* InNodeData, FRequestQueue& MergeQueue)
 		: Request(InRequest)
 		, NodeData(InNodeData)
 		, MergeRequestQueue(MergeQueue)
@@ -114,21 +113,23 @@ public:
 	}
 
 private:
-	TSharedPtr<FStaticMeshRequest> Request;
-	Body_info& NodeData;
+	FStaticMeshRequest* Request;
+	Body_info* NodeData;
 	FRequestQueue& MergeRequestQueue;
 };
 
 class FXSPFileLoadRunnalbe : public FRunnable
 {
 public:
-	FXSPFileLoadRunnalbe(std::fstream& InFileStream, int32 InStartDbid, int32 InCount, FRequestQueue& LoadQueue, FRequestQueue& MergeQueue)
-		: FileStream(InFileStream)
+	FXSPFileLoadRunnalbe(class FXSPLoader* Owner, std::fstream& InFileStream, int32 InStartDbid, int32 InCount, FRequestQueue& LoadQueue, FRequestQueue& MergeQueue)
+		: Loader(Owner)
+		, FileStream(InFileStream)
 		, StartDbid(InStartDbid)
 		, Count(InCount)
 		, LoadRequestQueue(LoadQueue)
 		, MergeRequestQueue(MergeQueue)
 	{}
+	~FXSPFileLoadRunnalbe();
 
 	virtual bool Init() override
 	{
@@ -149,13 +150,15 @@ private:
 	TAtomic<bool> bIsRunning;
 	TAtomic<bool> bStopRequested;
 
+	class FXSPLoader* Loader;
+
 	std::fstream& FileStream;
 	int32 StartDbid;
 	int32 Count;
 	FRequestQueue& LoadRequestQueue;
 	FRequestQueue& MergeRequestQueue;
 	TArray<Header_info> HeaderList;
-	TMap<int32, Body_info> BodyMap;
+	TMap<int32, Body_info*> BodyMap;
 };
 
 class FXSPLoader : public IXSPLoader
@@ -165,11 +168,13 @@ public:
 	virtual ~FXSPLoader();
 
 	virtual bool Init(const TArray<FString>& FilePathNameArray) override;
-	virtual void RequestStaticMeshe(int32 Dbid, float Priority, TWeakObjectPtr<UStaticMeshComponent>& TargetMeshComponent) override;
+	virtual void RequestStaticMeshe(int32 Dbid, float Priority, UStaticMeshComponent* TargetMeshComponent) override;
 
 	void Tick(float DeltaTime);
 
 	void Reset();
+
+	void AddToBlacklist(int32 Dbid);
 
 private:
 	void DispatchNewRequests(uint64 InFrameNumber);
@@ -203,17 +208,23 @@ private:
 	2.在FXSPFileLoadRunnalbe::Run中被从LoadRequestQueue中取出,(读取节点数据后)填充材质数据,与节点数据一起被封装为一个构建任务分发到线程池	--每个文件对应一个工作线程
 	3.在FBuildStaticMeshTask::DoWork中完成网格体构建后,被投入到全局的MergeRequestQueue	--线程池任意线程
 	4.在FXSPLoader::Tick中被从MergeRequestQueue中取出,将静态网格设置给组件对象,之后Request被销毁	--Game线程
-	在整个声明周期中,无论Request如何流转,AllRequestMap一直持有Request,用于Request状态的更新(线程同步?)
+	在整个声明周期中,无论Request如何流转,AllRequestMap一直持有Request,最终必须确保Request在Game线程释放
 	*/
 
 	//全部请求的Map,只在Game线程访问
-	TMap<int32, TSharedPtr<FStaticMeshRequest>> AllRequestMap;
+	TMap<int32, FStaticMeshRequest*> AllRequestMap;
+
+	//没有网格体的节点
+	TArray<int32> Blacklist;
+	FCriticalSection BlacklistCS;
 
 	//收集新请求的缓存数组,由外部调用线程和Game线程访问
-	TArray<TSharedPtr<FStaticMeshRequest>> CachedRequestArray;
+	TArray<FStaticMeshRequest*> CachedRequestArray;
 	FCriticalSection CachedRequestArrayCS;
 
+	//所有Request的可更新属性共享同一把锁
 	FCriticalSection RequestCS;
 
 	friend struct FRequestQueue;
+	friend class FXSPFileLoadRunnalbe;
 };

@@ -15,6 +15,7 @@ public class Demo : ModuleRules
                 "MeshConversion",
                 "MeshDescription",
                 "StaticMeshDescription",
+				"XSPLoader"
 			});
 
 		// Uncomment if you are using Slate UI

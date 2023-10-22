@@ -15,7 +15,7 @@ public:
 	virtual void StartupModule() override;
 	virtual void ShutdownModule() override;
 
-	IXSPLoader& Get() const;
+	XSPLOADER_API IXSPLoader& Get() const;
 
 private:
 	FTSTicker::FDelegateHandle TickerHandle;

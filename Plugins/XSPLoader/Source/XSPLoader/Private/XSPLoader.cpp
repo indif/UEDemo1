@@ -364,26 +364,29 @@ namespace
 void FStaticMeshRequest::Invalidate()
 {
     bValid = false;
-    TargetComponent.Reset();
-    StaticMesh.Reset();
 }
 
-void FRequestQueue::Add(TSharedPtr<FStaticMeshRequest>& Request)
+bool FStaticMeshRequest::IsRequestCurrent(uint64 FrameNumber)
+{
+    return bValid && (FrameNumber - LastUpdateFrameNumber < 2);
+}
+
+void FRequestQueue::Add(FStaticMeshRequest* Request)
 {
     FScopeLock Lock(&RequestListCS);
     AddNoLock(Request);
 }
 
-void FRequestQueue::AddNoLock(TSharedPtr<FStaticMeshRequest>& Request)
+void FRequestQueue::AddNoLock(FStaticMeshRequest* Request)
 {
     RequestList.Emplace(Request);
 }
 
-void FRequestQueue::TakeFirst(TSharedPtr<FStaticMeshRequest>& Request)
+void FRequestQueue::TakeFirst(FStaticMeshRequest*& Request)
 {
     FScopeLock Lock(&RequestListCS);
 
-    Request.Reset();
+    Request = nullptr;
     if (!RequestList.IsEmpty())
     {
         FSortRequestFunctor HighPriority;
@@ -395,19 +398,20 @@ void FRequestQueue::TakeFirst(TSharedPtr<FStaticMeshRequest>& Request)
             FScopeLock RequestLock(&Loader->RequestCS);
             if ((*Itr)->IsRequestCurrent(FrameNumber))
             {
-                if (!Request.IsValid() || HighPriority(*Itr, Request))
+                if (nullptr == Request || HighPriority(*Itr, Request))
                 {
                     Request = *Itr;
                 }
             }
             else
             {
+                //过期请求,标记为失效,并从队列中移除
                 (*Itr)->Invalidate();
                 Itr.RemoveCurrent();
             }
         }
 
-        if (Request.IsValid())
+        if (Request != nullptr)
         {
             RequestList.Remove(Request);
         }
@@ -416,7 +420,8 @@ void FRequestQueue::TakeFirst(TSharedPtr<FStaticMeshRequest>& Request)
 
 bool FRequestQueue::IsEmpty()
 {
-    return true;
+    FScopeLock Lock(&RequestListCS);
+    return RequestList.IsEmpty();
 }
 
 void FRequestQueue::Swap(FRequestList& OutRequestList)
@@ -427,9 +432,16 @@ void FRequestQueue::Swap(FRequestList& OutRequestList)
 
 void FBuildStaticMeshTask::DoWork()
 {
-    BuildStaticMesh(Request->StaticMesh.Get(), NodeData);
-    Request->TargetComponent->SetStaticMesh(Request->StaticMesh.Get());
+    BuildStaticMesh(Request->StaticMesh.Get(), *NodeData);
     MergeRequestQueue.Add(Request);
+}
+
+FXSPFileLoadRunnalbe::~FXSPFileLoadRunnalbe()
+{
+    for (auto Pair : BodyMap)
+    {
+        delete Pair.Value;
+    }
 }
 
 uint32 FXSPFileLoadRunnalbe::Run()
@@ -447,9 +459,9 @@ uint32 FXSPFileLoadRunnalbe::Run()
     //循环等待并执行加载请求
     while (!bStopRequested)
     {
-        TSharedPtr<FStaticMeshRequest> Request;
+        FStaticMeshRequest* Request = nullptr;
         LoadRequestQueue.TakeFirst(Request);
-        if (Request.IsValid() && Request->IsValid())
+        if (nullptr != Request)
         {
             //计算全局dbid在本文件中的局部dbid
             int32 LocalDbid = Request->Dbid - StartDbid;
@@ -457,32 +469,54 @@ uint32 FXSPFileLoadRunnalbe::Run()
 
             //读取Body数据
             bool bHasCache = true;
+            Body_info* NodeDataPtr = nullptr;
             if (!BodyMap.Contains(LocalDbid))
             {
                 bHasCache = false;
                 //读过的节点数据就缓存在内存中
-                read_body_info(FileStream, HeaderList[LocalDbid], false, BodyMap.Emplace(LocalDbid));
+                NodeDataPtr = new Body_info;
+                read_body_info(FileStream, HeaderList[LocalDbid], false, *NodeDataPtr);
+                BodyMap.Emplace(LocalDbid, NodeDataPtr);
+            }
+            else
+            {
+                NodeDataPtr = BodyMap[LocalDbid];
             }
 
-            Body_info& NodeData = BodyMap[LocalDbid];
-            if (CheckNode(NodeData))
+            if (CheckNode(*NodeDataPtr))
             {
                 //新读入的节点需要尝试继承上级节点的材质数据
-                int32 LocalParentDbid = NodeData.parentdbid < 0 ? -1 : NodeData.parentdbid - StartDbid;
+                int32 LocalParentDbid = NodeDataPtr->parentdbid < 0 ? -1 : NodeDataPtr->parentdbid - StartDbid;
                 if (LocalParentDbid >= 0 && LocalParentDbid < Count)
                 {
+                    Body_info* ParentNodeDataPtr = nullptr;
                     if (!BodyMap.Contains(LocalParentDbid))
                     {
-                        read_body_info(FileStream, HeaderList[LocalParentDbid], false, BodyMap.Emplace(LocalParentDbid));
+                        ParentNodeDataPtr = new Body_info;
+                        read_body_info(FileStream, HeaderList[LocalParentDbid], false, *ParentNodeDataPtr);
+                        BodyMap.Emplace(LocalParentDbid, ParentNodeDataPtr);
+                    }
+                    else
+                    {
+                        ParentNodeDataPtr = BodyMap[LocalParentDbid];
                     }
                     
-                    InheritMaterial(NodeData, BodyMap[LocalParentDbid]);
+                    InheritMaterial(*NodeDataPtr, *ParentNodeDataPtr);
                 }
 
-                GetMaterial(NodeData, Request->Color, Request->Roughness);
+                GetMaterial(*NodeDataPtr, Request->Color, Request->Roughness);
 
                 //分发构建网格体的任务到线程池
-                (new FAutoDeleteAsyncTask<FBuildStaticMeshTask>(Request, BodyMap[LocalDbid], MergeRequestQueue))->StartBackgroundTask();
+                (new FAutoDeleteAsyncTask<FBuildStaticMeshTask>(Request, NodeDataPtr, MergeRequestQueue))->StartBackgroundTask();
+            }
+            else
+            {
+                //无网格体的节点请求,置为无效,并加入黑名单
+                FScopeLock Lock(&Loader->RequestCS);
+                Request->Invalidate();
+                //置为可释放
+                Request->bReleasable.store(true);
+                Loader->AddToBlacklist(Request->Dbid);
             }
         }
 
@@ -542,13 +576,13 @@ bool FXSPLoader::Init(const TArray<FString>& FilePathNameArray)
         return false;
     }
 
-    //SourceMaterial = TStrongObjectPtr(Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, L"/Game/DynamicGenActors/M_MainOpaque")));
+    SourceMaterial = TStrongObjectPtr(Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, L"/XSPLoader/M_MainOpaque")));
 
     //为每个源文件创建一个读取线程
     for (int32 i = 0; i < NumFiles; ++i)
     {
         FString ThreadName = FString::Printf(TEXT("XSPFileLoader_%d"), i);
-        SourceDataList[i]->FileLoadRunnable = new FXSPFileLoadRunnalbe(SourceDataList[i]->FileStream, SourceDataList[i]->StartDbid, SourceDataList[i]->Count, SourceDataList[i]->LoadRequestQueue, MergeRequestQueue);
+        SourceDataList[i]->FileLoadRunnable = new FXSPFileLoadRunnalbe(this, SourceDataList[i]->FileStream, SourceDataList[i]->StartDbid, SourceDataList[i]->Count, SourceDataList[i]->LoadRequestQueue, MergeRequestQueue);
         SourceDataList[i]->LoadThread = FRunnableThread::Create(SourceDataList[i]->FileLoadRunnable, *ThreadName, 8 * 1024, TPri_Normal);
     }
 
@@ -558,10 +592,18 @@ bool FXSPLoader::Init(const TArray<FString>& FilePathNameArray)
     return true;
 }
 
-void FXSPLoader::RequestStaticMeshe(int32 Dbid, float Priority, TWeakObjectPtr<UStaticMeshComponent>& TargetMeshComponent)
+void FXSPLoader::RequestStaticMeshe(int32 Dbid, float Priority, UStaticMeshComponent* TargetMeshComponent)
 {
-    FScopeLock Lock(&CachedRequestArrayCS);
-    CachedRequestArray.Emplace(new FStaticMeshRequest(Dbid, Priority, TargetMeshComponent));
+    {
+        FScopeLock Lock(&BlacklistCS);
+        if (Blacklist.Contains(Dbid))
+            return;
+    }
+
+    {
+        FScopeLock Lock(&CachedRequestArrayCS);
+        CachedRequestArray.Emplace(new FStaticMeshRequest(Dbid, Priority, TargetMeshComponent));
+    }
 }
 
 void FXSPLoader::Tick(float DeltaTime)
@@ -603,9 +645,17 @@ void FXSPLoader::Reset()
     SourceDataList.Empty();
 }
 
+void FXSPLoader::AddToBlacklist(int32 Dbid)
+{
+    FScopeLock Lock(&BlacklistCS);
+    if (Blacklist.Contains(Dbid))
+        return;
+    Blacklist.Add(Dbid);
+}
+
 void FXSPLoader::DispatchNewRequests(uint64 InFrameNumber)
 {
-    TArray<TSharedPtr<FStaticMeshRequest>> NewRequestArray;
+    TArray<FStaticMeshRequest*> NewRequestArray;
     {
         FScopeLock Lock(&CachedRequestArrayCS);
         NewRequestArray = MoveTemp(CachedRequestArray);
@@ -616,19 +666,19 @@ void FXSPLoader::DispatchNewRequests(uint64 InFrameNumber)
         int32 Dbid = TempRequest->Dbid;
         if (AllRequestMap.Contains(Dbid))
         {
-            //更新已有请求
+            //已有请求,更新时间戳
             FScopeLock Lock(&RequestCS);
-            TSharedPtr<FStaticMeshRequest>& Request = AllRequestMap[Dbid];
-            Request->Priority = TempRequest->Priority;
+            FStaticMeshRequest* Request = AllRequestMap[Dbid];
+            Request->bValid = true;
             Request->LastUpdateFrameNumber = InFrameNumber;
-            Request->TargetComponent = TempRequest->TargetComponent;
+            //Request->Priority = TempRequest->Priority;
+            //Request->TargetComponent = TempRequest->TargetComponent;
         }
         else
         {
-            //新请求,为其创建静态网格对象,并加入Map
+            //新请求,为其创建静态网格对象
             TempRequest->StaticMesh = TStrongObjectPtr<UStaticMesh>(NewObject<UStaticMesh>());
             TempRequest->LastUpdateFrameNumber = InFrameNumber;
-            AllRequestMap.Emplace(Dbid, TempRequest);
             //根据Dbid分发到相应的请求队列
             for (auto SourceDataPtr : SourceDataList)
             {
@@ -638,6 +688,8 @@ void FXSPLoader::DispatchNewRequests(uint64 InFrameNumber)
                     break;
                 }
             }
+            //加入到总Map
+            AllRequestMap.Emplace(Dbid, TempRequest);
         }
     }
 }
@@ -647,14 +699,18 @@ void FXSPLoader::ProcessMergeRequests(float AvailableTime)
     int64 BeginTicks = FDateTime::Now().GetTicks();
     while (!MergeRequestQueue.IsEmpty())
     {
-        TSharedPtr<FStaticMeshRequest> Request;
+        FStaticMeshRequest* Request;
         MergeRequestQueue.TakeFirst(Request);
-        if (Request.IsValid() && Request->IsValid())
+        if (nullptr != Request)
         {
             Request->TargetComponent->SetMaterial(0, CreateMaterialInstanceDynamic(SourceMaterial.Get(), Request->Color, Request->Roughness));
-            //Request->TargetComponent->SetStaticMesh(Request->StaticMesh.Get());
+            Request->TargetComponent->SetStaticMesh(Request->StaticMesh.Get());
+            Request->StaticMesh->RemoveFromRoot();
             Request->TargetComponent->RegisterComponent();
+
+            UE_LOG(LogXSPLoader, Display, TEXT("完成加载: %d"), Request->Dbid);
         }
+        //Request->bReleasable.store(true);
 
         //最终完成的请求,从总Map中移除
         AllRequestMap.Remove(Request->Dbid);
@@ -666,12 +722,18 @@ void FXSPLoader::ProcessMergeRequests(float AvailableTime)
 
 void FXSPLoader::PruneRequests(uint64 InFrameNumber)
 {
-    for (TMap<int32, TSharedPtr<FStaticMeshRequest>>::TIterator Itr(AllRequestMap); Itr; ++Itr)
+    for (TMap<int32, FStaticMeshRequest*>::TIterator Itr(AllRequestMap); Itr; ++Itr)
     {
+        FScopeLock RequestLock(&RequestCS);
         if (!Itr.Value()->IsRequestCurrent(InFrameNumber))
         {
             Itr.Value()->Invalidate();
-            Itr.RemoveCurrent();
+            if (Itr.Value()->bReleasable)
+            {
+                //唯一释放请求的位置
+                delete Itr.Value();
+                Itr.RemoveCurrent();
+            }
         }
     }
 }
