@@ -19,6 +19,11 @@ public:
 	virtual bool Init(const TArray<FString>& FilePathNameArray) = 0;
 
 	/**
+	 *	重置
+	 */
+	virtual void Reset() = 0;
+
+	/**
 	 *	请求静态网格数据（数据加载完毕后会自动设置到目标组件上）
 	 *	@param	Dbid				[in]	请求的节点
 	 *  @param	Priority			[in]	优先级

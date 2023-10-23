@@ -427,6 +427,12 @@ bool FRequestQueue::IsEmpty()
     return RequestList.IsEmpty();
 }
 
+void FRequestQueue::Empty()
+{
+    FScopeLock Lock(&RequestListCS);
+    RequestList.Empty();
+}
+
 void FRequestQueue::Swap(FRequestList& OutRequestList)
 {
     FScopeLock Lock(&RequestListCS);
@@ -577,7 +583,7 @@ bool FXSPLoader::Init(const TArray<FString>& FilePathNameArray)
     }
     if (bFail)
     {
-        Reset();
+        ResetInternal();
         return false;
     }
 
@@ -595,6 +601,22 @@ bool FXSPLoader::Init(const TArray<FString>& FilePathNameArray)
     FrameNumber.store(0);
 
     return true;
+}
+
+void FXSPLoader::Reset()
+{
+    if (!bInitialized)
+        return;
+
+    ResetInternal();
+
+    SourceMaterial.Reset();
+    MergeRequestQueue.Empty();
+    for (TMap<int32, FStaticMeshRequest*>::TIterator Itr(AllRequestMap); Itr; ++Itr)
+        delete Itr.Value();
+    AllRequestMap.Empty();
+
+    bInitialized = false;
 }
 
 void FXSPLoader::RequestStaticMeshe(int32 Dbid, float Priority, UStaticMeshComponent* TargetMeshComponent)
@@ -628,7 +650,7 @@ void FXSPLoader::Tick(float DeltaTime)
     ReleaseRequests();
 }
 
-void FXSPLoader::Reset()
+void FXSPLoader::ResetInternal()
 {
     for (auto SourceDataPtr : SourceDataList)
     {

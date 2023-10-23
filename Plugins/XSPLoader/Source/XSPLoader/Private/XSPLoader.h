@@ -92,6 +92,8 @@ public:
 
 	bool IsEmpty();
 
+	void Empty();
+
 	typedef TArray<FStaticMeshRequest*> FRequestList;
 	void Swap(FRequestList& RequestList);
 
@@ -174,18 +176,17 @@ public:
 	virtual ~FXSPLoader();
 
 	virtual bool Init(const TArray<FString>& FilePathNameArray) override;
+	virtual void Reset() override;
 	virtual void RequestStaticMeshe(int32 Dbid, float Priority, UStaticMeshComponent* TargetMeshComponent) override;
 
 	void Tick(float DeltaTime);
-
-	void Reset();
-
-	void AddToBlacklist(int32 Dbid);
 
 private:
 	void DispatchNewRequests(uint64 InFrameNumber);
 	void ProcessMergeRequests(float AvailableTime);
 	void ReleaseRequests();
+	void AddToBlacklist(int32 Dbid);
+	void ResetInternal();
 
 private:
 	bool bInitialized = false;

@@ -18,6 +18,7 @@ public:
 	ADynamicLoadGameMode();
 
 	virtual void BeginPlay() override;
+	virtual void Logout(AController* Exiting) override;
 	virtual void Tick(float deltaSeconds) override;
 
 private:

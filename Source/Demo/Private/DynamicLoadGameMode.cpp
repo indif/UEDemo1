@@ -77,6 +77,11 @@ void ADynamicLoadGameMode::BeginPlay()
     UE_LOG(LogDynamicLoadDemo, Display, TEXT("总共%d节点"), Index);
 }
 
+void ADynamicLoadGameMode::Logout(AController* Exiting)
+{
+    FModuleManager::GetModuleChecked<FXSPLoaderModule>("XSPLoader").Get().Reset();
+}
+
 void ADynamicLoadGameMode::Tick(float deltaSeconds)
 {
     //模拟每帧剔除操作,所有节点都通过,对未加载的节点发起加载请求
