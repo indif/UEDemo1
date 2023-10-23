@@ -405,8 +405,11 @@ void FRequestQueue::TakeFirst(FStaticMeshRequest*& Request)
             }
             else
             {
+                FStaticMeshRequest* TheRequest = *Itr;
+
                 //过期请求,标记为失效,并从队列中移除
                 (*Itr)->Invalidate();
+                (*Itr)->SetReleasable();
                 Itr.RemoveCurrent();
             }
         }
@@ -512,11 +515,13 @@ uint32 FXSPFileLoadRunnalbe::Run()
             else
             {
                 //无网格体的节点请求,置为无效,并加入黑名单
-                FScopeLock Lock(&Loader->RequestCS);
-                Request->Invalidate();
-                //置为可释放
-                Request->bReleasable.store(true);
+                {
+                    FScopeLock Lock(&Loader->RequestCS);
+                    Request->Invalidate();
+                }
                 Loader->AddToBlacklist(Request->Dbid);
+                //置为可释放
+                Request->SetReleasable();
             }
         }
 
@@ -620,7 +625,7 @@ void FXSPLoader::Tick(float DeltaTime)
     float AvailableTime = 0.1f - UsedTime;
     ProcessMergeRequests(AvailableTime);
 
-    PruneRequests(CurrentFrameNumber);
+    ReleaseRequests();
 }
 
 void FXSPLoader::Reset()
@@ -661,18 +666,39 @@ void FXSPLoader::DispatchNewRequests(uint64 InFrameNumber)
         NewRequestArray = MoveTemp(CachedRequestArray);
     }
 
+    auto DispatchToRequestQueue = [this](int32 Dbid, FStaticMeshRequest* Request) {
+        for (auto SourceDataPtr : SourceDataList)
+        {
+            if (Dbid >= SourceDataPtr->StartDbid && Dbid < SourceDataPtr->StartDbid + SourceDataPtr->Count)
+            {
+                SourceDataPtr->LoadRequestQueue.Add(Request);
+                break;
+            }
+        }
+    };
+
     for (auto& TempRequest : NewRequestArray)
     {
         int32 Dbid = TempRequest->Dbid;
         if (AllRequestMap.Contains(Dbid))
         {
-            //已有请求,更新时间戳
-            FScopeLock Lock(&RequestCS);
+            //已有请求
             FStaticMeshRequest* Request = AllRequestMap[Dbid];
-            Request->bValid = true;
-            Request->LastUpdateFrameNumber = InFrameNumber;
-            //Request->Priority = TempRequest->Priority;
-            //Request->TargetComponent = TempRequest->TargetComponent;
+            {
+                //更新时间戳
+                FScopeLock Lock(&RequestCS);
+                Request->bValid = true;
+                Request->LastUpdateFrameNumber = InFrameNumber;
+                //Request->Priority = TempRequest->Priority;
+                //Request->TargetComponent = TempRequest->TargetComponent;
+            }
+            if (Request->IsReleasable())
+            {
+                //重置并重新分发到请求队列
+                Request->ResetReleasable();
+                DispatchToRequestQueue(Dbid, Request);
+            }
+            delete TempRequest;
         }
         else
         {
@@ -680,14 +706,7 @@ void FXSPLoader::DispatchNewRequests(uint64 InFrameNumber)
             TempRequest->StaticMesh = TStrongObjectPtr<UStaticMesh>(NewObject<UStaticMesh>());
             TempRequest->LastUpdateFrameNumber = InFrameNumber;
             //根据Dbid分发到相应的请求队列
-            for (auto SourceDataPtr : SourceDataList)
-            {
-                if (Dbid >= SourceDataPtr->StartDbid && Dbid < SourceDataPtr->StartDbid + SourceDataPtr->Count)
-                {
-                    SourceDataPtr->LoadRequestQueue.Add(TempRequest);
-                    break;
-                }
-            }
+            DispatchToRequestQueue(Dbid, TempRequest);
             //加入到总Map
             AllRequestMap.Emplace(Dbid, TempRequest);
         }
@@ -709,31 +728,24 @@ void FXSPLoader::ProcessMergeRequests(float AvailableTime)
             Request->TargetComponent->RegisterComponent();
 
             UE_LOG(LogXSPLoader, Display, TEXT("完成加载: %d"), Request->Dbid);
+            //标记为可释放
+            Request->SetReleasable();
         }
-        //Request->bReleasable.store(true);
-
-        //最终完成的请求,从总Map中移除
-        AllRequestMap.Remove(Request->Dbid);
 
         if ((float)(FDateTime::Now().GetTicks() - BeginTicks) / ETimespan::TicksPerSecond >= AvailableTime)
             break;
     }
 }
 
-void FXSPLoader::PruneRequests(uint64 InFrameNumber)
+void FXSPLoader::ReleaseRequests()
 {
     for (TMap<int32, FStaticMeshRequest*>::TIterator Itr(AllRequestMap); Itr; ++Itr)
     {
-        FScopeLock RequestLock(&RequestCS);
-        if (!Itr.Value()->IsRequestCurrent(InFrameNumber))
+        if (Itr.Value()->IsReleasable())
         {
-            Itr.Value()->Invalidate();
-            if (Itr.Value()->bReleasable)
-            {
-                //唯一释放请求的位置
-                delete Itr.Value();
-                Itr.RemoveCurrent();
-            }
+            //唯一释放请求的位置
+            delete Itr.Value();
+            Itr.RemoveCurrent();
         }
     }
 }

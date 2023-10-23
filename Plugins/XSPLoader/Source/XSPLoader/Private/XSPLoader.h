@@ -62,6 +62,12 @@ struct FStaticMeshRequest
 
 	bool IsValid() { return bValid; }
 
+	void SetReleasable() { bReleasable.store(true); }
+
+	void ResetReleasable() { bReleasable.store(false); }
+
+	bool IsReleasable() { return bReleasable; }
+
 	bool IsRequestCurrent(uint64 FrameNumber);
 };
 
@@ -179,7 +185,7 @@ public:
 private:
 	void DispatchNewRequests(uint64 InFrameNumber);
 	void ProcessMergeRequests(float AvailableTime);
-	void PruneRequests(uint64 InFrameNumber);
+	void ReleaseRequests();
 
 private:
 	bool bInitialized = false;
