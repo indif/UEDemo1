@@ -13,7 +13,9 @@
 #include <vector>
 
 
-#define BUILD_MESH_ASYNC 1
+#define BUILD_MESH_ASYNC 0
+
+#define BATCH_NODES 0
 
 DEFINE_LOG_CATEGORY_STATIC(LogDynamicGenActorsDemo, Log, All);
 
@@ -193,20 +195,23 @@ void InheritMaterial(std::vector<Body_info*>& node_list)
 
 void GetMaterial(Body_info* Node, FLinearColor& Color, float& Roughness)
 {
-    if (IsValidMaterial(Node->material))
+    if (nullptr != Node)
     {
-        Color = FLinearColor(Node->material[0], Node->material[1], Node->material[2]);
-        Roughness = Node->material[3];
-        return;
-    }
-
-    for (size_t i = 0, len = Node->fragment.size(); i < len; i++)
-    {
-        if (IsValidMaterial(Node->fragment[i].material))
+        if (IsValidMaterial(Node->material))
         {
-            Color = FLinearColor(Node->fragment[i].material[0], Node->fragment[i].material[1], Node->fragment[i].material[2]);
-            Roughness = Node->fragment[i].material[3];
+            Color = FLinearColor(Node->material[0], Node->material[1], Node->material[2]);
+            Roughness = Node->material[3];
             return;
+        }
+
+        for (size_t i = 0, len = Node->fragment.size(); i < len; i++)
+        {
+            if (IsValidMaterial(Node->fragment[i].material))
+            {
+                Color = FLinearColor(Node->fragment[i].material[0], Node->fragment[i].material[1], Node->fragment[i].material[2]);
+                Roughness = Node->fragment[i].material[3];
+                return;
+            }
         }
     }
 
@@ -435,6 +440,16 @@ void BuildStaticMesh(UStaticMesh* StaticMesh, const Body_info& Node)
     BuildStaticMesh(StaticMesh, VertexList);
 }
 
+void BuildStaticMesh(UStaticMesh* StaticMesh, std::vector<Body_info*>& NodeList)
+{
+    TArray<FVector> VertexList;
+    for (auto NodePtr : NodeList)
+    {
+        AppendNodeMesh(*NodePtr, VertexList);
+    }
+    BuildStaticMesh(StaticMesh, VertexList);
+}
+
 UMaterialInstanceDynamic* CreateMaterialInstanceDynamic(UMaterialInterface* SourceMaterial, const FLinearColor& Color, float Roughness)
 {
     UMaterialInstanceDynamic* MaterialInstanceDynamic = UMaterialInstanceDynamic::Create(SourceMaterial, nullptr);
@@ -594,6 +609,11 @@ void ADynamicGenActorsGameMode::LoadScene()
     NumLoadedNodes = 0;
     NumValidNodes = 0;
     int32 NumNodes = NodeDataList.size();
+
+#if BATCH_NODES
+    NumValidNodes = 1;
+    StaticMeshList.Add(NewObject<UStaticMesh>());
+#else
     StaticMeshList.AddUninitialized(NumNodes);
     for (int32 i = 0; i < NumNodes; i++)
     {
@@ -611,6 +631,7 @@ void ADynamicGenActorsGameMode::LoadScene()
             StaticMeshList[i] = nullptr;
         }
     }
+#endif
 
 #if BUILD_MESH_ASYNC //异步多线程构建静态网格对象
     for (int32 i = 0; i < NumNodes; i++)
@@ -621,6 +642,15 @@ void ADynamicGenActorsGameMode::LoadScene()
         }
     }
 #else //Game线程构建静态网格对象
+
+#if BATCH_NODES
+    BuildStaticMesh(StaticMeshList[0], NodeDataList);
+    FLoadedData LoadedData;
+    LoadedData.Name = FName(FString::FromInt(0));
+    LoadedData.StaticMesh = StaticMeshList[0];
+    GetMaterial(nullptr, LoadedData.Color, LoadedData.Roughness);
+    LoadedNodes.Enqueue(LoadedData);
+#else
     for (int32 i = 0; i < NumNodes; i++)
     {
         UStaticMesh* StaticMesh = StaticMeshList[i];
@@ -638,13 +668,14 @@ void ADynamicGenActorsGameMode::LoadScene()
         }
     }
 #endif
+#endif
 }
 
 void ADynamicGenActorsGameMode::AddToScene(FLoadedData* LoadedData)
 {
     UStaticMeshComponent* StaticMeshComponent = NewObject<UStaticMeshComponent>(DataActor, LoadedData->Name);
     StaticMeshComponent->SetStaticMesh(LoadedData->StaticMesh);
-    StaticMeshComponent->SetMaterial(0, CreateMaterialInstanceDynamic(SourceMaterial, LoadedData->Color, LoadedData->Roughness));
+    //StaticMeshComponent->SetMaterial(0, CreateMaterialInstanceDynamic(SourceMaterial, LoadedData->Color, LoadedData->Roughness));
     StaticMeshComponent->AttachToComponent(DataActor->GetRootComponent(), FAttachmentTransformRules::KeepRelativeTransform);
     StaticMeshComponent->RegisterComponent();
 }
