@@ -72,6 +72,7 @@ private:
 
 	int32 NumValidNodes = 0;
 	int32 NumLoadedNodes = 0;
+	int32 NumTotoalTriangles = 0;
 
 	// 存放构建完成的静态网格对象及相关数据
 	struct FLoadedData
@@ -80,6 +81,7 @@ private:
 		UStaticMesh* StaticMesh;
 		FLinearColor Color;
 		float Roughness;
+		int32 NumTriangles = 0;
 	};
 
 	// 多生产者单消费者的无锁队列

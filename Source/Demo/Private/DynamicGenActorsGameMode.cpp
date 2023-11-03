@@ -13,9 +13,32 @@
 #include <vector>
 
 
-#define BUILD_MESH_ASYNC 0
+static int32 GBuildMeshAsync = 1;
+FAutoConsoleVariableRef CVarBuildMeshAsync(
+    TEXT("r.My.AsyncBuild"),
+    GBuildMeshAsync,
+    TEXT("Build static mesh async.\n")
+    TEXT(" 1: on(default)\n"),
+    ECVF_Default
+);
 
-#define BATCH_NODES 0
+static int32 GBatchNodes = 0;
+FAutoConsoleVariableRef CVarBatchNodes(
+    TEXT("r.My.BatchNodes"),
+    GBatchNodes,
+    TEXT("Build static mesh in a batch.\n")
+    TEXT(" 0: off(default)\n"),
+    ECVF_Default
+);
+
+static int32 GDummyRun = 0;
+FAutoConsoleVariableRef CVarDummyRun(
+    TEXT("r.My.DummyRun"),
+    GDummyRun,
+    TEXT("Only log statistics.\n")
+    TEXT(" 0: off(default)\n"),
+    ECVF_Default
+);
 
 DEFINE_LOG_CATEGORY_STATIC(LogDynamicGenActorsDemo, Log, All);
 
@@ -382,8 +405,11 @@ void AppendNodeMesh(const Body_info& Node, TArray<FVector>& VertexList)
     }
 }
 
-void BuildStaticMesh(UStaticMesh* StaticMesh, const TArray<FVector>& VertexList)
+int32 BuildStaticMesh(UStaticMesh* StaticMesh, const TArray<FVector>& VertexList)
 {
+    if (GDummyRun > 0)
+        return VertexList.Num() / 3;
+
     StaticMesh->GetStaticMaterials().Add(FStaticMaterial());
 
     FMeshDescription MeshDesc;
@@ -423,31 +449,31 @@ void BuildStaticMesh(UStaticMesh* StaticMesh, const TArray<FVector>& VertexList)
     TArray<const FMeshDescription*> MeshDescPtrs;
     MeshDescPtrs.Emplace(&MeshDesc);
 
-    //StaticMesh->SetNumSourceModels(3);
     StaticMesh->BuildFromMeshDescriptions(MeshDescPtrs, BuildParams);
-    //StaticMesh->Build();
+
+    return VertexList.Num() / 3;
 }
 
-void BuildStaticMesh(UStaticMesh* StaticMesh, const Body_info& Node)
+int32 BuildStaticMesh(UStaticMesh* StaticMesh, const Body_info& Node)
 {
     TArray<FVector> VertexList;
     AppendNodeMesh(Node, VertexList);
     if (VertexList.Num() < 3)
     {
         checkNoEntry();
-        return;
+        return 0;
     }
-    BuildStaticMesh(StaticMesh, VertexList);
+    return BuildStaticMesh(StaticMesh, VertexList);
 }
 
-void BuildStaticMesh(UStaticMesh* StaticMesh, std::vector<Body_info*>& NodeList)
+int32 BuildStaticMesh(UStaticMesh* StaticMesh, std::vector<Body_info*>& NodeList)
 {
     TArray<FVector> VertexList;
     for (auto NodePtr : NodeList)
     {
         AppendNodeMesh(*NodePtr, VertexList);
     }
-    BuildStaticMesh(StaticMesh, VertexList);
+    return BuildStaticMesh(StaticMesh, VertexList);
 }
 
 UMaterialInstanceDynamic* CreateMaterialInstanceDynamic(UMaterialInterface* SourceMaterial, const FLinearColor& Color, float Roughness)
@@ -482,11 +508,12 @@ public:
 
     void DoWork()
     {
+        ADynamicGenActorsGameMode::FLoadedData LoadedData;
+
         // 构建静态网格
-        BuildStaticMesh(StaticMesh, *Node);
+        LoadedData.NumTriangles = BuildStaticMesh(StaticMesh, *Node);
 
         // 完成构建的数据推送到待合并队列，在Game线程合并进场景
-        ADynamicGenActorsGameMode::FLoadedData LoadedData;
         LoadedData.Name = FName(FString::FromInt(Node->dbid));
         LoadedData.StaticMesh = StaticMesh;
         GetMaterial(Node, LoadedData.Color, LoadedData.Roughness);
@@ -585,6 +612,7 @@ void ADynamicGenActorsGameMode::Tick(float DeltaSeconds)
             {
                 AddToScene(&LoadedData);
                 NumLoadedNodes++;
+                NumTotoalTriangles += LoadedData.NumTriangles;
 
                 FString Message = FString::Printf(TEXT("图元加载中 (%d / %d) ..."), NumLoadedNodes, NumValidNodes);
                 GEngine->AddOnScreenDebugMessage(0, 5.0f, FColor::Red, Message, true);
@@ -600,6 +628,8 @@ void ADynamicGenActorsGameMode::Tick(float DeltaSeconds)
 
             FString Message = FString::Printf(TEXT("加载完成 (%d)"), NumLoadedNodes);
             GEngine->AddOnScreenDebugMessage(0, 10.0f, FColor::Green, Message, true);
+
+            UE_LOG(LogDynamicGenActorsDemo, Display, TEXT("统计结果: \n\t节点数=%d\n\t三角形数=%d"), NumValidNodes, NumTotoalTriangles);
         }
     }
 }
@@ -610,72 +640,84 @@ void ADynamicGenActorsGameMode::LoadScene()
     NumValidNodes = 0;
     int32 NumNodes = NodeDataList.size();
 
-#if BATCH_NODES
-    NumValidNodes = 1;
-    StaticMeshList.Add(NewObject<UStaticMesh>());
-#else
-    StaticMeshList.AddUninitialized(NumNodes);
-    for (int32 i = 0; i < NumNodes; i++)
+    if (GBatchNodes > 0)
     {
-        if (CheckNode(*NodeDataList[i]))
+        NumValidNodes = 1;
+        StaticMeshList.Add(NewObject<UStaticMesh>());
+    }
+    else
+    {
+        StaticMeshList.AddUninitialized(NumNodes);
+        for (int32 i = 0; i < NumNodes; i++)
         {
-            NumValidNodes++;
-            // 必须在Game线程创建UObject派生对象
-            StaticMeshList[i] = NewObject<UStaticMesh>();
+            if (CheckNode(*NodeDataList[i]))
+            {
+                NumValidNodes++;
+                // 必须在Game线程创建UObject派生对象
+                StaticMeshList[i] = NewObject<UStaticMesh>();
+            }
+            else
+            {
+                // 释放空的Node对象
+                delete NodeDataList[i];
+                NodeDataList[i] = nullptr;
+                StaticMeshList[i] = nullptr;
+            }
+        }
+    }
+
+    //异步多线程构建静态网格对象
+    if (GBuildMeshAsync > 0) 
+    {
+        for (int32 i = 0; i < NumNodes; i++)
+        {
+            if (StaticMeshList[i])
+            {
+                (new FAutoDeleteAsyncTask<FBuildStaticMeshTask>(this, StaticMeshList[i], NodeDataList[i]))->StartBackgroundTask();
+            }
+        }
+    }
+    else // Game线程构建静态网格对象
+    {
+
+        if (GBatchNodes > 0)
+        {
+            FLoadedData LoadedData;
+
+            LoadedData.NumTriangles = BuildStaticMesh(StaticMeshList[0], NodeDataList);
+            LoadedData.Name = FName(FString::FromInt(0));
+            LoadedData.StaticMesh = StaticMeshList[0];
+            GetMaterial(nullptr, LoadedData.Color, LoadedData.Roughness);
+            LoadedNodes.Enqueue(LoadedData);
         }
         else
         {
-            // 释放空的Node对象
-            delete NodeDataList[i];
-            NodeDataList[i] = nullptr;
-            StaticMeshList[i] = nullptr;
+            for (int32 i = 0; i < NumNodes; i++)
+            {
+                UStaticMesh* StaticMesh = StaticMeshList[i];
+                if (StaticMesh)
+                {
+                    Body_info* Node = NodeDataList[i];
+
+                    FLoadedData LoadedData;
+
+                    LoadedData.NumTriangles = BuildStaticMesh(StaticMesh, *Node);
+
+                    LoadedData.Name = FName(FString::FromInt(Node->dbid));
+                    LoadedData.StaticMesh = StaticMesh;
+                    GetMaterial(Node, LoadedData.Color, LoadedData.Roughness);
+                    LoadedNodes.Enqueue(LoadedData);
+                }
+            }
         }
     }
-#endif
-
-#if BUILD_MESH_ASYNC //异步多线程构建静态网格对象
-    for (int32 i = 0; i < NumNodes; i++)
-    {
-        if (StaticMeshList[i])
-        {
-            (new FAutoDeleteAsyncTask<FBuildStaticMeshTask>(this, StaticMeshList[i], NodeDataList[i]))->StartBackgroundTask();
-        }
-    }
-#else //Game线程构建静态网格对象
-
-#if BATCH_NODES
-    BuildStaticMesh(StaticMeshList[0], NodeDataList);
-    FLoadedData LoadedData;
-    LoadedData.Name = FName(FString::FromInt(0));
-    LoadedData.StaticMesh = StaticMeshList[0];
-    GetMaterial(nullptr, LoadedData.Color, LoadedData.Roughness);
-    LoadedNodes.Enqueue(LoadedData);
-#else
-    for (int32 i = 0; i < NumNodes; i++)
-    {
-        UStaticMesh* StaticMesh = StaticMeshList[i];
-        if (StaticMesh)
-        {
-            Body_info* Node = NodeDataList[i];
-
-            BuildStaticMesh(StaticMesh, *Node);
-
-            FLoadedData LoadedData;
-            LoadedData.Name = FName(FString::FromInt(Node->dbid));
-            LoadedData.StaticMesh = StaticMesh;
-            GetMaterial(Node, LoadedData.Color, LoadedData.Roughness);
-            LoadedNodes.Enqueue(LoadedData);
-        }
-    }
-#endif
-#endif
 }
 
 void ADynamicGenActorsGameMode::AddToScene(FLoadedData* LoadedData)
 {
     UStaticMeshComponent* StaticMeshComponent = NewObject<UStaticMeshComponent>(DataActor, LoadedData->Name);
     StaticMeshComponent->SetStaticMesh(LoadedData->StaticMesh);
-    //StaticMeshComponent->SetMaterial(0, CreateMaterialInstanceDynamic(SourceMaterial, LoadedData->Color, LoadedData->Roughness));
+    StaticMeshComponent->SetMaterial(0, CreateMaterialInstanceDynamic(SourceMaterial, LoadedData->Color, LoadedData->Roughness));
     StaticMeshComponent->AttachToComponent(DataActor->GetRootComponent(), FAttachmentTransformRules::KeepRelativeTransform);
     StaticMeshComponent->RegisterComponent();
 }
