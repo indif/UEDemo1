@@ -29,5 +29,5 @@ public:
 	 *  @param	Priority			[in]	优先级
 	 *  @param	TargetMeshComponent	[in]	目标组件
 	 */
-	virtual void RequestStaticMeshe(int32 Dbid, float Priority, UStaticMeshComponent* TargetMeshComponent) = 0;
+	virtual void RequestStaticMesh(int32 Dbid, float Priority, UStaticMeshComponent* TargetMeshComponent) = 0;
 };

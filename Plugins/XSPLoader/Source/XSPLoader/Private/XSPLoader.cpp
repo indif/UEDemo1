@@ -83,25 +83,57 @@ namespace
         }
     }
 
-    //网格体
-    void AppendRawMesh(const std::vector<float>& vertices, TArray<FVector>& VertexList)
+    void ComputeNormal(const TArray<FVector>& VertexList, TArray<FVector>& NormalList)
     {
-        check(vertices.size() >= 9 && vertices.size() % 9 == 0);
+        int32 NumVertices = VertexList.Num();
+        NormalList.SetNumUninitialized(NumVertices);
 
-        int32 Index = VertexList.Num();
-        int32 NumMeshVertices = vertices.size() / 3;
-        if (NumMeshVertices >= 3 && NumMeshVertices % 3 == 0)
+        const int32 NumTris = NumVertices / 3;
+        for (int32 TriIdx = 0; TriIdx < NumTris; TriIdx++)
         {
-            VertexList.AddUninitialized(NumMeshVertices);
-            for (size_t j = 0, j_len = vertices.size(); j < j_len; j += 3)
-                VertexList[Index++].Set(vertices[j + 1] * 100, vertices[j + 0] * 100, vertices[j + 2] * 100);
+            FVector P[3];
+            for (int32 CornerIdx = 0; CornerIdx < 3; CornerIdx++)
+            {
+                int32 VertIdx = (TriIdx * 3) + CornerIdx;
+                P[CornerIdx] = VertexList[VertIdx];
+            }
+
+            const FVector Edge21 = P[1] - P[2];
+            const FVector Edge20 = P[0] - P[2];
+            FVector TriNormal = (Edge21 ^ Edge20).GetSafeNormal();
+            NormalList[TriIdx * 3 + 0] = NormalList[TriIdx * 3 + 1] = NormalList[TriIdx * 3 + 2] = TriNormal;
         }
     }
 
-    //椭圆形
-    void AppendEllipticalMesh(const std::vector<float>& vertices, TArray<FVector>& VertexList)
+    //网格体
+    void AppendRawMesh(const std::vector<float>& vertices, TArray<FVector>& VertexList, TArray<FVector>& NormalList)
     {
-        check(vertices.size() == 10);
+        if (vertices.size() < 9 || vertices.size() % 9 != 0)
+        {
+            checkNoEntry();
+            return;
+        }
+
+        TArray<FVector> LocalVertexList, LocalNormalList;
+        int32 NumVertices = vertices.size() / 3;
+        LocalVertexList.SetNumUninitialized(NumVertices);
+        int32 Index = 0;
+        for (size_t j = 0, j_len = vertices.size(); j < j_len; j += 3)
+            LocalVertexList[Index++].Set(vertices[j + 1] * 100, vertices[j + 0] * 100, vertices[j + 2] * 100);
+
+        ComputeNormal(LocalVertexList, LocalNormalList);
+        VertexList.Append(LocalVertexList);
+        NormalList.Append(LocalNormalList);
+    }
+
+    //椭圆形
+    void AppendEllipticalMesh(const std::vector<float>& vertices, TArray<FVector>& VertexList, TArray<FVector>& NormalList)
+    {
+        if (vertices.size() < 10)
+        {
+            checkNoEntry();
+            return;
+        }
 
         static const int32 NumSegments = 18;
         float DeltaAngle = UE_TWO_PI / NumSegments;
@@ -112,6 +144,8 @@ namespace
         FVector YVector(vertices[7], vertices[6], vertices[8]);
         float Radius = vertices[9] * 100;
 
+        FVector Normal = (XVector ^ YVector).GetSafeNormal();
+
         //沿径向的一圈向量
         TArray<FVector> RadialVectors;
         RadialVectors.SetNumUninitialized(NumSegments + 1);
@@ -121,23 +155,32 @@ namespace
         }
 
         //椭圆面
-        TArray<FVector> EllipticalMeshVertices;
+        TArray<FVector> EllipticalMeshVertices, EllipticalMeshNormals;
         EllipticalMeshVertices.SetNumUninitialized(NumSegments * 3);
+        EllipticalMeshNormals.SetNumUninitialized(NumSegments * 3);
         int32 Index = 0;
         for (int32 i = 0; i < NumSegments; i++)
         {
+            EllipticalMeshNormals[Index] = Normal;
             EllipticalMeshVertices[Index++] = Origin;
+            EllipticalMeshNormals[Index] = Normal;
             EllipticalMeshVertices[Index++] = Origin + RadialVectors[i + 1];
+            EllipticalMeshNormals[Index] = Normal;
             EllipticalMeshVertices[Index++] = Origin + RadialVectors[i];
         }
 
         VertexList.Append(EllipticalMeshVertices);
+        NormalList.Append(EllipticalMeshNormals);
     }
 
     //圆柱体
-    void AppendCylinderMesh(const std::vector<float>& vertices, TArray<FVector>& VertexList)
+    void AppendCylinderMesh(const std::vector<float>& vertices, TArray<FVector>& VertexList, TArray<FVector>& NormalList)
     {
-        check(vertices.size() == 13);
+        if (vertices.size() < 13)
+        {
+            checkNoEntry();
+            return;
+        }
 
         static const int32 NumSegments = 18;
         float DeltaAngle = UE_TWO_PI / NumSegments;
@@ -172,8 +215,9 @@ namespace
             RadialVectors[i] = RadialDir.RotateAngleAxisRad(DeltaAngle * i, UpDir) * Radius;
         }
 
-        TArray<FVector> CylinderMeshVertices;
+        TArray<FVector> CylinderMeshVertices, CylinderMeshNormals;
         CylinderMeshVertices.SetNumUninitialized(NumSegments * 6);
+        CylinderMeshNormals.SetNumUninitialized(NumSegments * 6);
         int32 Index = 0;
         ////顶面
         //for (int32 i = 0; i < NumSegments; i++)
@@ -192,38 +236,47 @@ namespace
         //侧面
         for (int32 i = 0; i < NumSegments; i++)
         {
+            CylinderMeshNormals[Index] = RadialVectors[i].GetSafeNormal();
             CylinderMeshVertices[Index++] = BottomCenter + RadialVectors[i];
+            CylinderMeshNormals[Index] = RadialVectors[i].GetSafeNormal();
             CylinderMeshVertices[Index++] = TopCenter + RadialVectors[i];
+            CylinderMeshNormals[Index] = RadialVectors[i + 1].GetSafeNormal();
             CylinderMeshVertices[Index++] = BottomCenter + RadialVectors[i + 1];
+            CylinderMeshNormals[Index] = RadialVectors[i + 1].GetSafeNormal();
             CylinderMeshVertices[Index++] = BottomCenter + RadialVectors[i + 1];
+            CylinderMeshNormals[Index] = RadialVectors[i].GetSafeNormal();
             CylinderMeshVertices[Index++] = TopCenter + RadialVectors[i];
+            CylinderMeshNormals[Index] = RadialVectors[i + 1].GetSafeNormal();
             CylinderMeshVertices[Index++] = TopCenter + RadialVectors[i + 1];
         }
 
         VertexList.Append(CylinderMeshVertices);
+        NormalList.Append(CylinderMeshNormals);
     }
 
-    void AppendNodeMesh(const Body_info& Node, TArray<FVector>& VertexList)
+    void AppendNodeMesh(const Body_info& Node, TArray<FVector>& VertexList, TArray<FVector>& NormalList)
     {
         for (int32 i = 0, i_len = Node.fragment.Num(); i < i_len; i++)
         {
             if (Node.fragment[i].name == "Mesh")
             {
-                AppendRawMesh(Node.fragment[i].vertices, VertexList);
+                AppendRawMesh(Node.fragment[i].vertices, VertexList, NormalList);
             }
             else if (Node.fragment[i].name == "Elliptical")
             {
-                AppendEllipticalMesh(Node.fragment[i].vertices, VertexList);
+                AppendEllipticalMesh(Node.fragment[i].vertices, VertexList, NormalList);
             }
             else if (Node.fragment[i].name == "Cylinder")
             {
-                AppendCylinderMesh(Node.fragment[i].vertices, VertexList);
+                AppendCylinderMesh(Node.fragment[i].vertices, VertexList, NormalList);
             }
         }
     }
 
-    void BuildStaticMesh(UStaticMesh* StaticMesh, const TArray<FVector>& VertexList)
+    void BuildStaticMesh(UStaticMesh* StaticMesh, const TArray<FVector>& VertexList, const TArray<FVector>& NormalList)
     {
+        check(VertexList.Num() == NormalList.Num());
+
         StaticMesh->GetStaticMaterials().Add(FStaticMaterial());
 
         FMeshDescription MeshDesc;
@@ -243,8 +296,8 @@ namespace
             FVertexID VertexID = MeshDescBuilder.AppendVertex(VertexList[i]);
             VertexInstanceIDs[i] = MeshDescBuilder.AppendInstance(VertexID);
             MeshDescBuilder.SetInstanceColor(VertexInstanceIDs[i], FVector4f(1, 1, 1, 1));
-            MeshDescBuilder.SetInstanceUV(VertexInstanceIDs[i], FVector2D(0, 0));
-            MeshDescBuilder.SetInstanceNormal(VertexInstanceIDs[i], FVector(0, 0, 1));    //TODO:计算法线和切线
+            MeshDescBuilder.SetInstanceNormal(VertexInstanceIDs[i], NormalList[i]);
+            //MeshDescBuilder.SetInstanceUV(VertexInstanceIDs[i], FVector2D(0, 0));
             //MeshDescBuilder.SetInstanceTangentSpace(VertexInstanceIDs[i], FVector(), FVector(), true);
         }
 
@@ -263,21 +316,19 @@ namespace
         TArray<const FMeshDescription*> MeshDescPtrs;
         MeshDescPtrs.Emplace(&MeshDesc);
 
-        //StaticMesh->SetNumSourceModels(3);
         StaticMesh->BuildFromMeshDescriptions(MeshDescPtrs, BuildParams);
-        //StaticMesh->Build();
     }
 
     void BuildStaticMesh(UStaticMesh* StaticMesh, const Body_info& Node)
     {
-        TArray<FVector> VertexList;
-        AppendNodeMesh(Node, VertexList);
-        if (VertexList.Num() < 3)
+        TArray<FVector> VertexList, NormalList;
+        AppendNodeMesh(Node, VertexList, NormalList);
+        if (VertexList.Num() < 3 || VertexList.Num() != NormalList.Num())
         {
             checkNoEntry();
             return;
         }
-        BuildStaticMesh(StaticMesh, VertexList);
+        BuildStaticMesh(StaticMesh, VertexList, NormalList);
     }
 
     bool IsValidMaterial(float material[4])
@@ -368,7 +419,7 @@ void FStaticMeshRequest::Invalidate()
 
 bool FStaticMeshRequest::IsRequestCurrent(uint64 FrameNumber)
 {
-    return bValid && (FrameNumber - LastUpdateFrameNumber < 2);
+    return bValid && (FrameNumber - LastUpdateFrameNumber < 10);
 }
 
 void FRequestQueue::Add(FStaticMeshRequest* Request)
@@ -509,7 +560,7 @@ uint32 FXSPFileLoadRunnalbe::Run()
                     {
                         ParentNodeDataPtr = BodyMap[LocalParentDbid];
                     }
-                    
+
                     InheritMaterial(*NodeDataPtr, *ParentNodeDataPtr);
                 }
 
@@ -576,7 +627,7 @@ bool FXSPLoader::Init(const TArray<FString>& FilePathNameArray)
         FileStream.seekg(0, std::ios::beg);
         int NumNodes;
         FileStream.read((char*)&NumNodes, sizeof(NumNodes));
-        
+
         SourceDataList[i]->StartDbid = TotalNumNodes;
         SourceDataList[i]->Count = NumNodes;
         TotalNumNodes += NumNodes;
@@ -619,7 +670,7 @@ void FXSPLoader::Reset()
     bInitialized = false;
 }
 
-void FXSPLoader::RequestStaticMeshe(int32 Dbid, float Priority, UStaticMeshComponent* TargetMeshComponent)
+void FXSPLoader::RequestStaticMesh(int32 Dbid, float Priority, UStaticMeshComponent* TargetMeshComponent)
 {
     {
         FScopeLock Lock(&BlacklistCS);
@@ -697,7 +748,7 @@ void FXSPLoader::DispatchNewRequests(uint64 InFrameNumber)
                 break;
             }
         }
-    };
+        };
 
     for (auto& TempRequest : NewRequestArray)
     {
@@ -750,6 +801,8 @@ void FXSPLoader::ProcessMergeRequests(float AvailableTime)
             Request->TargetComponent->RegisterComponent();
 
             UE_LOG(LogXSPLoader, Display, TEXT("完成加载: %d"), Request->Dbid);
+            GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Green, FString::Printf(TEXT("完成加载: %d"), Request->Dbid));
+
             //标记为可释放
             Request->SetReleasable();
         }

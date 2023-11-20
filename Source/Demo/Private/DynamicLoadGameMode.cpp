@@ -90,7 +90,7 @@ void ADynamicLoadGameMode::Tick(float deltaSeconds)
     {
         if (Pair.Value->GetStaticMesh() == nullptr)
         {
-            FModuleManager::GetModuleChecked<FXSPLoaderModule>("XSPLoader").Get().RequestStaticMeshe(Pair.Key, 0, Pair.Value);
+            FModuleManager::GetModuleChecked<FXSPLoaderModule>("XSPLoader").Get().RequestStaticMesh(Pair.Key, 0, Pair.Value);
             Count += 1;
         }
         if (Count > 1000)

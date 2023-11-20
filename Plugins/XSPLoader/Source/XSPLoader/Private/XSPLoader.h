@@ -52,7 +52,7 @@ struct FStaticMeshRequest
 		, Priority(InPriority)
 		, LastUpdateFrameNumber(-1)
 		, bValid(true)
-		, Color(1,1,1)
+		, Color(1, 1, 1)
 		, Roughness(1)
 		, TargetComponent(InTargetComponent)
 		, bReleasable(false)
@@ -155,14 +155,14 @@ public:
 	}
 
 private:
-	TAtomic<bool> bIsRunning;
-	TAtomic<bool> bStopRequested;
+	TAtomic<bool> bIsRunning = false;
+	TAtomic<bool> bStopRequested = false;
 
-	class FXSPLoader* Loader;
+	class FXSPLoader* Loader = nullptr;
 
 	std::fstream& FileStream;
-	int32 StartDbid;
-	int32 Count;
+	int32 StartDbid = 0;
+	int32 Count = 0;
 	FRequestQueue& LoadRequestQueue;
 	FRequestQueue& MergeRequestQueue;
 	TArray<Header_info> HeaderList;
@@ -177,7 +177,7 @@ public:
 
 	virtual bool Init(const TArray<FString>& FilePathNameArray) override;
 	virtual void Reset() override;
-	virtual void RequestStaticMeshe(int32 Dbid, float Priority, UStaticMeshComponent* TargetMeshComponent) override;
+	virtual void RequestStaticMesh(int32 Dbid, float Priority, UStaticMeshComponent* TargetMeshComponent) override;
 
 	void Tick(float DeltaTime);
 
